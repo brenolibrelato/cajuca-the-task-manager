@@ -264,8 +264,14 @@ tr.paused td.actions { opacity: 1; }
 .actions { text-align: right; white-space: nowrap; }
 
 /* faixa do projeto */
-tr.proj-row td { background: var(--badge-bg); padding: 6px 10px; }
-tbody tr.proj-row:hover td { background: var(--badge-bg); }
+/* faixa do projeto no amarelo da marca; texto e ícones no preto da marca (legíveis nos dois temas) */
+tr.proj-row td { background: var(--brand-orange); color: var(--brand-ink); padding: 6px 10px; }
+tbody tr.proj-row:hover td { background: var(--brand-orange); }
+tr.proj-row .toggle,
+tr.proj-row button.icon { color: var(--brand-ink); }
+tr.proj-row button.icon:hover { background: rgba(26, 24, 25, .12); color: var(--brand-ink); }
+tr.proj-row .badge { background: rgba(255, 255, 255, .45); color: var(--brand-ink); }
+tr.proj-row .proj-count { background: rgba(255, 255, 255, .6); color: var(--brand-ink); }
 tr.proj-row:not(:first-child) td { border-top: 6px solid var(--bg); }
 .proj-head { display: flex; align-items: center; gap: 6px; }
 .proj-name { font-weight: 600; }
@@ -381,3 +387,14 @@ tr.st-overdue .status-text { color: var(--late-text); font-weight: 600; }
 tr.st-done .status-text { color: var(--done-text); }
 .share-table td { vertical-align: middle; }
 .share-table select { width: 100%; }
+
+/* ---------- edição direta ---------- */
+[data-field] { cursor: text; }
+td[data-field]:hover:not(.editing), .title-text[data-field]:hover:not(.editing) {
+  box-shadow: inset 0 0 0 1px var(--border);
+  border-radius: 6px;
+}
+td.editing { padding: 3px 6px; overflow: visible; }
+.title-text.editing { flex: 1; }
+.cell-edit { padding: 4px 6px; font-size: 14px; border-color: var(--accent); }
+textarea.cell-edit { min-height: 54px; resize: vertical; }

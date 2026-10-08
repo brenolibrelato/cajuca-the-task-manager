@@ -147,7 +147,7 @@ async function loadTasks() {
 
 // Aplica regras de tempo no banco e mostra os pop-ups pendentes (regras 9, 10, 12)
 async function runAutomations() {
-  if (state.busy || dlg.open) return;
+  if (state.busy || dlg.open || state.editing) return;   // não atrapalha quem está digitando
   state.busy = true;
   try {
     const { data, error } = await sb.rpc('refresh_automations');
@@ -234,19 +234,21 @@ function rowHtml({ node: n, showingAll }, leaving = false, readOnly = false) {
     <button class="icon" data-action="edit" title="${t('action.edit')}" aria-label="${t('action.edit')}">${ICON.edit}</button>
     <button class="icon danger" data-action="delete" title="${t('action.delete')}" aria-label="${t('action.delete')}">${ICON.trash}</button>`;
 
+  // edição direta: clicar na célula abre o campo (só para quem pode editar)
+  const ed = field => readOnly ? '' : ` data-field="${field}"`;
   return `
-    <tr class="st-${n.status} ${n.paused ? 'paused' : ''} ${leaving ? 'leaving' : ''}" data-id="${n.id}">
+    <tr class="st-${n.status} ${n.paused ? 'paused' : ''} ${leaving ? 'leaving' : ''} ${readOnly ? 'ro' : ''}" data-id="${n.id}">
       <td>
         <div class="title-wrap" style="padding-left:${n.depth * 22}px">
           ${toggle}
-          <span class="title-text"><strong>${esc(n.title)}</strong>${sit}</span>
+          <span class="title-text"${ed('title')}><strong>${esc(n.title)}</strong>${sit}</span>
         </div>
       </td>
-      <td class="notes" title="${esc(n.notes)}">${esc(n.notes)}</td>
-      <td>${n.priority ? `<span class="prio-yes">${t('yes')}</span>` : `<span class="muted">${t('no')}</span>`}</td>
-      <td>${n.due_date ? fmtDate(n.due_date) : '<span class="muted">—</span>'}</td>
-      <td>${n.reminder_days != null ? t('days.short', { n: n.reminder_days }) : '<span class="muted">—</span>'}</td>
-      <td title="${esc(n.assignee_email)}">${esc(n.assignee_email) || '<span class="muted">—</span>'}</td>
+      <td class="notes" title="${esc(n.notes)}"${ed('notes')}>${esc(n.notes)}</td>
+      <td${ed('priority')}>${n.priority ? `<span class="prio-yes">${t('yes')}</span>` : `<span class="muted">${t('no')}</span>`}</td>
+      <td${ed('due_date')}>${n.due_date ? fmtDate(n.due_date) : '<span class="muted">—</span>'}</td>
+      <td${ed('reminder_days')}>${n.reminder_days != null ? t('days.short', { n: n.reminder_days }) : '<span class="muted">—</span>'}</td>
+      <td title="${esc(n.assignee_email)}"${ed('assignee_email')}>${esc(n.assignee_email) || '<span class="muted">—</span>'}</td>
       <td>${statusCell(n, readOnly)}</td>
       <td class="actions">${actions}</td>
     </tr>`;
@@ -410,6 +412,74 @@ async function loadUsers() {
   const { data, error } = await sb.rpc('list_users');
   if (error) return fail(error);
   state.users = data;
+}
+
+// ---------- edição direta na tabela ----------
+function startInlineEdit(cell, node, field) {
+  const v = node[field];
+  let html;
+  switch (field) {
+    case 'title':
+      html = `<input class="cell-edit" maxlength="300" value="${esc(v)}">`; break;
+    case 'notes':
+      html = `<textarea class="cell-edit" rows="2" placeholder="${t('inline.notesHint')}">${esc(v)}</textarea>`; break;
+    case 'priority':
+      html = `<select class="cell-edit"><option value="no">${t('no')}</option><option value="yes" ${v ? 'selected' : ''}>${t('yes')}</option></select>`; break;
+    case 'due_date':
+      html = `<input class="cell-edit" type="date" value="${esc(v)}">`; break;
+    case 'reminder_days':
+      html = `<input class="cell-edit" type="number" min="0" value="${esc(v)}">`; break;
+    case 'assignee_email':
+      html = `<input class="cell-edit" type="email" list="assignees" value="${esc(v)}">`; break;
+    default: return;
+  }
+  state.editing = true;
+  cell.classList.add('editing');
+  cell.innerHTML = html;
+  const input = cell.querySelector('.cell-edit');
+  input.focus();
+  if (input.select && field !== 'due_date' && field !== 'reminder_days') input.select();
+  if (field === 'priority' && input.showPicker) { try { input.showPicker(); } catch { /* ignora */ } }
+
+  let finished = false;
+  const finish = async save => {
+    if (finished) return;
+    finished = true;
+    const value = readInlineValue(field, input.value);
+    if (!save || value === undefined || value === (v ?? null)) {
+      state.editing = false;
+      render();
+      return;
+    }
+    const { error } = await sb.from('tasks').update({ [field]: value }).eq('id', node.id);
+    state.editing = false;
+    if (error) { fail(error); render(); return; }
+    await afterChange();
+  };
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    else if (e.key === 'Enter' && !(field === 'notes' && e.shiftKey)) { e.preventDefault(); finish(true); }
+  });
+  input.addEventListener('blur', () => finish(true));
+  if (field === 'priority') input.addEventListener('change', () => finish(true));
+}
+
+// valor digitado -> valor do banco (undefined = inválido, não salva)
+function readInlineValue(field, raw) {
+  const s = raw.trim();
+  switch (field) {
+    case 'title': return s || undefined;               // título não pode ficar vazio
+    case 'notes': return s || null;
+    case 'priority': return raw === 'yes';
+    case 'due_date': return s || null;
+    case 'reminder_days': {
+      if (s === '') return null;
+      const n = Math.floor(Number(s));
+      return Number.isFinite(n) && n >= 0 ? n : undefined;
+    }
+    case 'assignee_email': return s || null;
+  }
 }
 
 // ---------- formulário de tarefa ----------
@@ -749,7 +819,14 @@ function bindUi() {
 
   $('#rows').addEventListener('click', async e => {
     const btn = e.target.closest('button[data-action]');
-    if (!btn) return;
+    if (!btn) {
+      const cell = e.target.closest('[data-field]');
+      if (cell && !state.editing) {
+        const node = state.forest.byId.get(cell.closest('tr').dataset.id);
+        if (node) startInlineEdit(cell, node, cell.dataset.field);
+      }
+      return;
+    }
     const projRow = btn.closest('tr.proj-row');
     if (projRow) {
       const key = projRow.dataset.project;

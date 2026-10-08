@@ -341,7 +341,7 @@ async function projectForm(project = null) {
 
   const done = openDialog(t(project ? 'proj.editTitle' : 'proj.newTitle'), `
     <form id="proj-form" style="display:grid;gap:14px">
-      <label>${t('proj.name')}<input name="name" required maxlength="120" value="${esc(project?.name)}" placeholder="${t('proj.placeholder')}"></label>
+      <label>${t('proj.name')}<input name="name" required maxlength="120" value="${esc(project?.name)}"></label>
       <fieldset>
         <legend>${t('share.title')}</legend>
         <p class="muted small">${t('share.hint')}</p>

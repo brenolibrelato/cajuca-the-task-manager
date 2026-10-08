@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cajuca</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <!-- Login -->
+  <main id="login" class="login" hidden>
+    <form id="login-form" class="login-card">
+      <div class="login-head">
+        <h1>Cajuca</h1>
+        <select class="lang-select" data-i18n-aria="top.language"></select>
+      </div>
+      <p class="muted" data-i18n="app.subtitle"></p>
+      <label><span data-i18n="login.email"></span><input type="email" name="email" required autocomplete="username"></label>
+      <label><span data-i18n="login.password"></span><input type="password" name="password" required autocomplete="current-password"></label>
+      <button class="primary" data-i18n="login.submit"></button>
+      <p id="login-error" class="error" hidden></p>
+    </form>
+  </main>
+
+  <!-- App -->
+  <div id="app" hidden>
+    <header class="topbar">
+      <h1>Cajuca</h1>
+      <nav class="tabs">
+        <button data-view="main" class="tab active" data-i18n="top.tasks"></button>
+        <button data-view="history" class="tab" data-i18n="top.history"></button>
+      </nav>
+      <div class="user">
+        <select class="lang-select" data-i18n-aria="top.language"></select>
+        <span id="user-email" class="muted"></span>
+        <button id="logout" class="ghost" data-i18n="top.logout"></button>
+      </div>
+    </header>
+
+    <section class="toolbar">
+      <label><span data-i18n="filter.priority"></span>
+        <select id="f-priority"></select>
+      </label>
+      <label><span id="f-period-label"></span>
+        <select id="f-period"></select>
+      </label>
+      <label><span data-i18n="filter.assignee"></span>
+        <select id="f-assignee"></select>
+      </label>
+      <button id="f-clear" class="ghost" data-i18n="filter.clear" hidden></button>
+      <span class="spacer"></span>
+      <button id="new-task" class="primary" data-i18n="btn.newTask"></button>
+    </section>
+
+    <div class="table-wrap">
+      <table class="tasks">
+        <colgroup>
+          <col class="w-title"><col class="w-notes"><col class="w-prio"><col class="w-due">
+          <col class="w-rem"><col class="w-who"><col class="w-status"><col class="w-act">
+        </colgroup>
+        <thead>
+          <tr>
+            <th data-i18n="col.task"></th><th data-i18n="col.notes"></th><th data-i18n="col.priority"></th>
+            <th data-i18n="col.due"></th><th data-i18n="col.reminder"></th><th data-i18n="col.assignee"></th>
+            <th data-i18n="col.status"></th><th></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <p id="empty" class="empty" hidden></p>
+    </div>
+  </div>
+
+  <datalist id="assignees"></datalist>
+  <dialog id="modal"></dialog>
+  <div id="toast" class="toast" hidden></div>
+</body>
+</html>

@@ -352,6 +352,7 @@ async function overduePopup(p) {
       <div class="grid2">
         <label>${t('form.due')}<input type="date" name="due" required min="${today}"></label>
         <label>${t('form.assignee')}<input type="email" name="assignee" list="assignees" value="${esc(node.assignee_email)}"></label>
+        <label>${t('form.reminder')}<input type="number" name="reminder_days" min="0"></label>
       </div>
       <p class="muted">${t('overdue.planHint')}</p>
       <div class="m-actions"><button class="primary">${t('overdue.planSubmit')}</button></div>
@@ -372,11 +373,16 @@ async function overduePopup(p) {
   dlg.querySelector('[data-pane=plan]').addEventListener('submit', async e => {
     e.preventDefault();
     const f = e.target;
-    const { error } = await sb.rpc('create_action_plan', {
+    const { data: planId, error } = await sb.rpc('create_action_plan', {
       p_parent: node.id, p_title: f.plan_title.value.trim(), p_due: f.due.value,
       p_assignee: f.assignee.value.trim() || null,
     });
     if (error) return fail(error);
+    if (f.reminder_days.value !== '') {
+      const { error: e2 } = await sb.from('tasks')
+        .update({ reminder_days: Number(f.reminder_days.value) }).eq('id', planId);
+      if (e2) return fail(e2);
+    }
     state.collapsed.delete(node.id);
     dlg.close();
   });

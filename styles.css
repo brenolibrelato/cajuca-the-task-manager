@@ -357,7 +357,9 @@ tr.leaving td { animation: leave 2.5s ease forwards; }
 }
 
 /* ---------- idioma ---------- */
-.login-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.login-head { display: flex; flex-direction: column-reverse; align-items: flex-start; gap: 14px; }
+.login-head .prefs { align-self: flex-end; }
+.login-card > * { min-width: 0; }
 .lang-select, .theme-select { width: auto; padding: 4px 8px; font-size: 13px; }
 .prefs { display: flex; gap: 6px; }
 

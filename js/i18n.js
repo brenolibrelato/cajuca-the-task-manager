@@ -13,6 +13,10 @@ const DICT = {
     'top.history': 'Histórico',
     'top.logout': 'Sair',
     'top.language': 'Idioma',
+    'top.theme': 'Tema',
+    'theme.auto': 'Tema automático',
+    'theme.light': 'Tema claro',
+    'theme.dark': 'Tema escuro',
 
     'proj.edit': 'Editar e compartilhar',
     'share.title': 'Compartilhar',
@@ -186,6 +190,10 @@ const DICT = {
     'top.history': 'History',
     'top.logout': 'Sign out',
     'top.language': 'Language',
+    'top.theme': 'Theme',
+    'theme.auto': 'Auto theme',
+    'theme.light': 'Light theme',
+    'theme.dark': 'Dark theme',
 
     'proj.edit': 'Edit and share',
     'share.title': 'Share',

@@ -24,8 +24,9 @@
   color-scheme: light;
 }
 
+/* tema escuro: automático (segue o sistema) ou escolhido no seletor */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #141314;
     --surface: #1e1c1d;
     --text: #f0ece6;
@@ -45,6 +46,26 @@
     --shadow: 0 10px 30px rgba(0, 0, 0, .5);
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #141314;
+  --surface: #1e1c1d;
+  --text: #f0ece6;
+  --muted: #a39d97;
+  --border: #33302f;
+  --accent: var(--brand-orange);
+  --accent-hover: #fcb85a;
+  --accent-text: var(--brand-ink);
+  --accent-ink: var(--brand-orange);
+  --done-bg: #16291d;
+  --done-text: #6ee79a;
+  --late-bg: #301a1a;
+  --late-text: #ff8a80;
+  --prog-text: #8ab4ff;
+  --badge-bg: #2a2728;
+  --row-hover: #242122;
+  --shadow: 0 10px 30px rgba(0, 0, 0, .5);
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -337,7 +358,17 @@ tr.leaving td { animation: leave 2.5s ease forwards; }
 
 /* ---------- idioma ---------- */
 .login-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.lang-select { width: auto; padding: 4px 8px; font-size: 13px; }
+.lang-select, .theme-select { width: auto; padding: 4px 8px; font-size: 13px; }
+.prefs { display: flex; gap: 6px; }
+
+/* logo: versão clara ou escura conforme o tema */
+.logo-dark { display: none; }
+:root[data-theme="dark"] .logo-light { display: none; }
+:root[data-theme="dark"] .logo-dark { display: inline; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .logo-light { display: none; }
+  :root:not([data-theme="light"]) .logo-dark { display: inline; }
+}
 
 /* ---------- compartilhamento ---------- */
 .small { font-size: 12px; }

@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cajuca</title>
+  <!-- aplica o tema escolhido antes de desenhar a página (evita piscar) -->
+  <script>try { var th = localStorage.getItem('cajuca.theme'); if (th === 'light' || th === 'dark') document.documentElement.dataset.theme = th; } catch (e) {}</script>
   <link rel="stylesheet" href="styles.css">
   <link rel="icon" type="image/png" href="assets/favicon.png">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
@@ -16,11 +18,11 @@
   <main id="login" class="login" hidden>
     <form id="login-form" class="login-card">
       <div class="login-head">
-        <h1><picture>
-          <source srcset="assets/logo-dark.png" media="(prefers-color-scheme: dark)">
-          <img class="logo" src="assets/logo.png" alt="Cajuca">
-        </picture></h1>
-        <select class="lang-select" data-i18n-aria="top.language"></select>
+        <h1><img class="logo logo-light" src="assets/logo.png" alt="Cajuca"><img class="logo logo-dark" src="assets/logo-dark.png" alt="Cajuca"></h1>
+        <div class="prefs">
+          <select class="theme-select" data-i18n-aria="top.theme"></select>
+          <select class="lang-select" data-i18n-aria="top.language"></select>
+        </div>
       </div>
       <p class="muted" data-i18n="app.subtitle"></p>
       <label><span data-i18n="login.email"></span><input type="email" name="email" required autocomplete="username"></label>
@@ -33,15 +35,13 @@
   <!-- App -->
   <div id="app" hidden>
     <header class="topbar">
-      <h1><picture>
-        <source srcset="assets/logo-dark.png" media="(prefers-color-scheme: dark)">
-        <img class="logo" src="assets/logo.png" alt="Cajuca">
-      </picture></h1>
+      <h1><img class="logo logo-light" src="assets/logo.png" alt="Cajuca"><img class="logo logo-dark" src="assets/logo-dark.png" alt="Cajuca"></h1>
       <nav class="tabs">
         <button data-view="main" class="tab active" data-i18n="top.tasks"></button>
         <button data-view="history" class="tab" data-i18n="top.history"></button>
       </nav>
       <div class="user">
+        <select class="theme-select" data-i18n-aria="top.theme"></select>
         <select class="lang-select" data-i18n-aria="top.language"></select>
         <span id="user-email" class="muted"></span>
         <button id="logout" class="ghost" data-i18n="top.logout"></button>

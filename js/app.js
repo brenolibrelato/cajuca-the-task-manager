@@ -795,6 +795,11 @@ function bindUi() {
     if (error) err.textContent = t('login.error');
   });
 
+  document.querySelectorAll('.theme-select').forEach(sel => sel.addEventListener('change', e => {
+    setTheme(e.target.value);
+    document.querySelectorAll('.theme-select').forEach(s => { s.value = e.target.value; });
+  }));
+
   document.querySelectorAll('.lang-select').forEach(sel => sel.addEventListener('change', e => {
     setLang(e.target.value);
     applyLanguage();
@@ -804,7 +809,25 @@ function bindUi() {
 }
 
 // ---------- idioma ----------
+// ---------- tema ----------
+const THEME_KEY = 'cajuca.theme';
+function getTheme() {
+  try { return localStorage.getItem(THEME_KEY) || 'auto'; } catch { return 'auto'; }
+}
+function setTheme(theme) {
+  try {
+    if (theme === 'auto') localStorage.removeItem(THEME_KEY);
+    else localStorage.setItem(THEME_KEY, theme);
+  } catch { /* navegador sem armazenamento: vale só nesta visita */ }
+  if (theme === 'auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+}
+
 function applyLanguage() {
+  document.querySelectorAll('.theme-select').forEach(sel => {
+    sel.innerHTML = ['auto', 'light', 'dark'].map(v => `<option value="${v}">${t('theme.' + v)}</option>`).join('');
+    sel.value = getTheme();
+  });
   applyStatic();
   document.querySelectorAll('.lang-select').forEach(sel => {
     sel.innerHTML = Object.entries(LANGS).map(([code, name]) => `<option value="${code}">${name}</option>`).join('');

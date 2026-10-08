@@ -62,6 +62,10 @@ const DICT = {
     'action.toggle': 'Expandir/recolher',
     'action.close': 'Fechar',
 
+    'done.movedOne': '"{title}" foi concluída e foi para o Histórico.',
+    'done.movedMany': '{n} tarefas foram concluídas e foram para o Histórico.',
+    'done.viewHistory': 'Ver histórico',
+
     'empty.filtered': 'Nenhuma tarefa corresponde aos filtros.',
     'empty.history': 'Nenhuma tarefa concluída ainda.',
     'empty.main': 'Nenhuma tarefa aberta. Crie a primeira!',
@@ -201,6 +205,10 @@ const DICT = {
     'action.delete': 'Delete',
     'action.toggle': 'Expand/collapse',
     'action.close': 'Close',
+
+    'done.movedOne': '"{title}" was completed and moved to History.',
+    'done.movedMany': '{n} tasks were completed and moved to History.',
+    'done.viewHistory': 'View history',
 
     'empty.filtered': 'No tasks match the filters.',
     'empty.history': 'No completed tasks yet.',

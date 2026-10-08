@@ -245,6 +245,26 @@ legend { padding: 0 4px; color: var(--muted); font-size: 13px; }
   z-index: 10;
 }
 .toast.err { background: var(--late-text); color: #fff; }
+.toast-btn {
+  margin-left: 12px;
+  background: none;
+  border: 1px solid currentColor;
+  color: inherit;
+  border-radius: 8px;
+  padding: 2px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* árvore recém-concluída: fica verde por um instante e some aos poucos */
+tr.leaving td { animation: leave 2.5s ease forwards; }
+@keyframes leave {
+  0%, 55% { opacity: 1; }
+  100%    { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  tr.leaving td { animation: none; }
+}
 
 /* ---------- idioma ---------- */
 .login-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

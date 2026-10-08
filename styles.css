@@ -116,6 +116,47 @@ label.chk input { width: auto; }
   flex-wrap: wrap;
 }
 .toolbar label { min-width: 150px; }
+
+/* filtro de projeto: lista suspensa de checkboxes */
+.field { display: grid; gap: 4px; font-size: 13px; color: var(--muted); min-width: 180px; }
+details.multi { position: relative; }
+details.multi summary {
+  list-style: none;
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 28px 6px 9px;
+  color: var(--text);
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+  position: relative;
+}
+details.multi summary::-webkit-details-marker { display: none; }
+details.multi summary::after { content: '▾'; position: absolute; right: 10px; color: var(--muted); }
+details.multi[open] summary { border-color: var(--muted); }
+.multi-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 5;
+  min-width: 100%;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  padding: 8px;
+  display: grid;
+  gap: 2px;
+}
+.multi-panel label.chk { padding: 5px 6px; border-radius: 6px; white-space: nowrap; font-size: 14px; cursor: pointer; }
+.multi-panel label.chk:hover { background: var(--row-hover); }
+.multi-panel button { margin-top: 4px; font-size: 13px; }
 .spacer { flex: 1; }
 
 /* ---------- tabela ---------- */
@@ -187,6 +228,21 @@ tr.paused td { opacity: .45; }                              /* "Parado" e descen
 tr.paused td.actions { opacity: 1; }
 
 .actions { text-align: right; white-space: nowrap; }
+
+/* faixa do projeto */
+tr.proj-row td { background: var(--badge-bg); padding: 6px 10px; }
+tbody tr.proj-row:hover td { background: var(--badge-bg); }
+tr.proj-row:not(:first-child) td { border-top: 6px solid var(--bg); }
+.proj-head { display: flex; align-items: center; gap: 6px; }
+.proj-name { font-weight: 600; }
+.proj-count {
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 0 8px;
+}
+tr.proj-empty td { color: var(--muted); padding: 10px 10px 10px 38px; font-size: 13px; }
 .resume { color: var(--accent); font-weight: 600; }
 
 .empty { text-align: center; color: var(--muted); padding: 40px 0; }
@@ -269,3 +325,13 @@ tr.leaving td { animation: leave 2.5s ease forwards; }
 /* ---------- idioma ---------- */
 .login-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .lang-select { width: auto; padding: 4px 8px; font-size: 13px; }
+
+/* ---------- compartilhamento ---------- */
+.small { font-size: 12px; }
+.badge.share { margin-left: 4px; }
+.status-text { padding: 4px 6px; color: var(--muted); }
+tr.st-in_progress .status-text { color: var(--prog-text); }
+tr.st-overdue .status-text { color: var(--late-text); font-weight: 600; }
+tr.st-done .status-text { color: var(--done-text); }
+.share-table td { vertical-align: middle; }
+.share-table select { width: 100%; }

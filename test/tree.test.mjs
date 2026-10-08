@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {
   buildForest, rootsFor, computeVisible, flatten, toggleNode, todayISO, addDays,
-  DEFAULT_FILTERS, isFilterActive,
+  DEFAULT_FILTERS, isFilterActive, isRowFilterActive, groupByProject, filterRootsByProject, NO_PROJECT,
 } from '../js/tree.js';
 
 const today = todayISO();
@@ -72,5 +72,30 @@ toggleNode('P', true, col, exp);
 assert.deepEqual(ids(view('main', DEFAULT_FILTERS, col, exp)), ['P', 'S', 'S.1', 'S.1.a']);
 toggleNode('P', false, col, exp);
 assert.equal(ids(view('main', DEFAULT_FILTERS, col, exp)).length, 9);
+
+// ---------- projetos ----------
+const projects = [{ id: 'gab', name: 'Tarefas Gabriele' }, { id: 'let', name: 'Tarefas Leticia' }, { id: 'lau', name: 'Tarefas Laura' }];
+const pf = buildForest([
+  t('A', null, { project_id: 'let' }), t('A.1', 'A'),
+  t('B', null, { project_id: 'gab' }),
+  t('C', null),                                   // sem projeto
+  t('D', null, { project_id: 'apagado' }),        // projeto que não existe mais
+]);
+const keys = gs => gs.map(g => `${g.key}:${g.roots.map(r => r.id).join(',')}`);
+
+// ordem por nome; vazios só com includeEmpty; "Sem projeto" por último (inclui órfãos)
+assert.deepEqual(keys(groupByProject(pf.roots, projects)), ['gab:B', 'let:A', `${NO_PROJECT}:C,D`]);
+assert.deepEqual(keys(groupByProject(pf.roots, projects, { includeEmpty: true })),
+  ['gab:B', 'lau:', 'let:A', `${NO_PROJECT}:C,D`]);
+
+// checkbox: mais de um projeto; árvore inteira acompanha a raiz
+const sel = ['let', NO_PROJECT];
+assert.deepEqual(filterRootsByProject(pf.roots, sel).map(r => r.id), ['A', 'C']);
+assert.deepEqual(keys(groupByProject(filterRootsByProject(pf.roots, sel), projects, { selected: sel, includeEmpty: true })),
+  ['let:A', `${NO_PROJECT}:C`]);
+
+// filtro de projeto conta para "limpar filtros", mas não esconde filhas
+assert.equal(isFilterActive({ ...DEFAULT_FILTERS, projects: ['gab'] }), true);
+assert.equal(isRowFilterActive({ ...DEFAULT_FILTERS, projects: ['gab'] }), false);
 
 console.log('tree.js: todos os testes passaram');

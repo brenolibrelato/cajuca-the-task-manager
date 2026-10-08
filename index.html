@@ -39,6 +39,13 @@
     </header>
 
     <section class="toolbar">
+      <div class="field">
+        <span data-i18n="filter.project"></span>
+        <details id="f-projects" class="multi">
+          <summary></summary>
+          <div class="multi-panel"></div>
+        </details>
+      </div>
       <label><span data-i18n="filter.priority"></span>
         <select id="f-priority"></select>
       </label>
@@ -50,6 +57,7 @@
       </label>
       <button id="f-clear" class="ghost" data-i18n="filter.clear" hidden></button>
       <span class="spacer"></span>
+      <button id="new-project" data-i18n="btn.newProject"></button>
       <button id="new-task" class="primary" data-i18n="btn.newTask"></button>
     </section>
 

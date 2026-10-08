@@ -72,10 +72,52 @@ export function rootsFor(view, forest) {
 }
 
 // ---------- filtros ----------
-export const DEFAULT_FILTERS = { priority: 'all', period: 'all', assignee: '' };
+// projects: ids marcados no filtro ('__none__' = sem projeto); vazio = todos
+export const DEFAULT_FILTERS = { priority: 'all', period: 'all', assignee: '', projects: [] };
+export const NO_PROJECT = '__none__';
+
+// Filtros que valem tarefa a tarefa (o de projeto vale para a árvore inteira)
+export function isRowFilterActive(f) {
+  return f.priority !== 'all' || f.period !== 'all' || f.assignee !== '';
+}
 
 export function isFilterActive(f) {
-  return f.priority !== 'all' || f.period !== 'all' || f.assignee !== '';
+  return isRowFilterActive(f) || f.projects.length > 0;
+}
+
+// ---------- projetos ----------
+// Só a raiz guarda o projeto; a árvore inteira pertence a ele.
+export const projectKey = root => root.project_id || NO_PROJECT;
+
+export function filterRootsByProject(roots, selected) {
+  if (!selected.length) return roots;
+  return roots.filter(r => selected.includes(projectKey(r)));
+}
+
+// Grupos na ordem: projetos por nome, "Sem projeto" por último.
+// includeEmpty: mostra também projetos cadastrados sem nenhuma árvore.
+export function groupByProject(roots, projects, { selected = [], includeEmpty = false } = {}) {
+  const byKey = new Map();
+  roots.forEach(r => {
+    const k = projectKey(r);
+    if (!byKey.has(k)) byKey.set(k, []);
+    byKey.get(k).push(r);
+  });
+
+  const wanted = k => !selected.length || selected.includes(k);
+  const sorted = [...projects].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  const groups = sorted
+    .filter(p => wanted(p.id) && (includeEmpty || byKey.has(p.id)))
+    .map(p => ({ key: p.id, project: p, roots: byKey.get(p.id) || [] }));
+
+  // tarefas sem projeto (ou de um projeto que não existe mais)
+  const known = new Set(projects.map(p => p.id));
+  const orphans = [...byKey.entries()]
+    .filter(([k]) => k === NO_PROJECT || !known.has(k))
+    .flatMap(([, rs]) => rs);
+  if (orphans.length && wanted(NO_PROJECT)) groups.push({ key: NO_PROJECT, project: null, roots: orphans });
+
+  return groups;
 }
 
 export function matches(node, f, view, today) {

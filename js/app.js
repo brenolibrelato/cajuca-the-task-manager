@@ -2,7 +2,8 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { SUPABASE_URL, SUPABASE_KEY, REFRESH_MINUTES } from './config.js';
 import {
   DEFAULT_FILTERS, todayISO, buildForest, descendants, ancestors, rootsFor,
-  isFilterActive, computeVisible, flatten, toggleNode,
+  isFilterActive, isRowFilterActive, computeVisible, flatten, toggleNode,
+  NO_PROJECT, filterRootsByProject, groupByProject,
 } from './tree.js';
 import { t, getLang, setLang, LANGS, fmtDate, applyStatic, translateError } from './i18n.js';
 
@@ -15,8 +16,14 @@ const state = {
   view: 'main',
   filters: { main: { ...DEFAULT_FILTERS }, history: { ...DEFAULT_FILTERS } },
   forest: { byId: new Map(), roots: [] },
+  projects: [],
+  members: [],          // compartilhamentos visíveis (project_members)
+  users: [],            // usuários cadastrados (id, email)
+  userId: null,
+  collapsedProjects: new Set(),
   collapsed: new Set(),
   expanded: new Set(),
+  leaving: new Set(),   // raízes recém-concluídas, ainda visíveis na tela principal
   busy: false,
 };
 
@@ -31,17 +38,45 @@ function esc(s) {
 }
 
 let toastTimer;
-function toast(msg, isError = false) {
-  if (dlg.open) {
+function toast(msg, isError = false, action = null) {
+  if (isError && dlg.open) {
     const box = dlg.querySelector('.m-error');
     if (box) { box.textContent = msg; box.hidden = false; return; }
   }
   const el = $('#toast');
   el.textContent = msg;
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'toast-btn';
+    b.textContent = action.label;
+    b.addEventListener('click', () => { el.hidden = true; action.onClick(); });
+    el.append(b);
+  }
   el.className = 'toast' + (isError ? ' err' : '');
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, 5000);
+  toastTimer = setTimeout(() => { el.hidden = true; }, action ? 8000 : 5000);
+}
+
+function switchView(view) {
+  state.view = view;
+  document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.view === view));
+  render();
+}
+
+// Árvore que acabou de ser concluída: continua na tela por alguns segundos
+// (em verde, sumindo aos poucos) antes de ir para o histórico.
+const LEAVE_MS = 2500;
+function announceFinished(roots) {
+  roots.forEach(r => state.leaving.add(r.id));
+  const msg = roots.length === 1
+    ? t('done.movedOne', { title: roots[0].title })
+    : t('done.movedMany', { n: roots.length });
+  toast(msg, false, { label: t('done.viewHistory'), onClick: () => switchView('history') });
+  setTimeout(() => {
+    roots.forEach(r => state.leaving.delete(r.id));
+    render();
+  }, LEAVE_MS);
 }
 
 // Erros do banco chegam como texto da exceção (ex.: regra 8)
@@ -76,13 +111,36 @@ const ICON = {
   plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
   edit: '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
   trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+  share: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 11a3 3 0 1 0 0-6M18 20c0-2.4-1-4.4-2.6-5.3"/></svg>',
 };
+
+// ---------- permissões (o banco garante; aqui só decide o que mostrar) ----------
+const isOwner = p => !!p && p.owner_id === state.userId;
+const myRole = p => state.members.find(m => m.project_id === p?.id && m.user_id === state.userId)?.role;
+const canEditProject = p => isOwner(p) || myRole(p) === 'editor';
+const userEmail = id => state.users.find(u => u.id === id)?.email ?? '?';
+
+function rootOf(node) { let r = node; while (r.parent) r = r.parent; return r; }
+function canEditNode(node) {
+  const root = rootOf(node);
+  if (!root.project_id) return true;   // sem projeto: só o dono enxerga
+  return canEditProject(state.projects.find(p => p.id === root.project_id));
+}
 
 // ---------- dados ----------
 async function loadTasks() {
-  const { data, error } = await sb.from('tasks').select('*');
-  if (error) return fail(error);
+  const [{ data, error }, proj, mem] = await Promise.all([
+    sb.from('tasks').select('*'),
+    sb.from('projects').select('*'),
+    sb.from('project_members').select('*'),
+  ]);
+  if (error || proj.error || mem.error) return fail(error || proj.error || mem.error);
+  state.projects = proj.data;
+  state.members = mem.data;
+  const wasOpen = new Set(state.forest.roots.filter(r => r.status !== 'done').map(r => r.id));
   state.forest = buildForest(data);
+  const finished = state.forest.roots.filter(r => r.status === 'done' && wasOpen.has(r.id));
+  if (finished.length) announceFinished(finished);
   render();
   return true;
 }
@@ -127,18 +185,38 @@ function renderFilters() {
   $('#f-assignee').value = f.assignee;
   $('#assignees').innerHTML = emails.map(e => `<option value="${esc(e)}">`).join('');
 
+  renderProjectFilter(f);
   $('#f-clear').hidden = !isFilterActive(f);
   $('#new-task').hidden = state.view !== 'main';
+  $('#new-project').hidden = state.view !== 'main';
 }
 
-function statusCell(n) {
+const projectName = key => key === NO_PROJECT
+  ? t('proj.none')
+  : state.projects.find(p => p.id === key)?.name ?? t('proj.none');
+
+// Filtro de projeto: lista de checkboxes (dá para marcar mais de um)
+function renderProjectFilter(f) {
+  const box = $('#f-projects');
+  const sorted = [...state.projects].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  const opts = [...sorted.map(p => [p.id, p.name, isOwner(p) ? '' : userEmail(p.owner_id)]), [NO_PROJECT, t('proj.none'), '']];
+  box.querySelector('.multi-panel').innerHTML = opts.map(([id, name, owner]) => `
+    <label class="chk"><input type="checkbox" value="${esc(id)}" ${f.projects.includes(id) ? 'checked' : ''}> ${esc(name)}${owner ? ` <span class="muted small">· ${esc(owner)}</span>` : ''}</label>`).join('')
+    + (f.projects.length ? `<button type="button" class="ghost" data-clear-projects>${t('filter.allProjects')}</button>` : '');
+  box.querySelector('summary').textContent = !f.projects.length ? t('filter.allProjects')
+    : f.projects.length === 1 ? projectName(f.projects[0])
+    : t('filter.nSelected', { n: f.projects.length });
+}
+
+function statusCell(n, readOnly = false) {
+  if (readOnly) return `<span class="status-text">${statusText(n.status)}</span>`;
   const opts = ['not_started', 'in_progress', 'done']
     .map(s => `<option value="${s}" ${n.status === s ? 'selected' : ''}>${statusText(s)}</option>`);
   if (n.status === 'overdue') opts.unshift(`<option value="overdue" selected disabled>${statusText('overdue')}</option>`);
   return `<select class="status" data-action="status" aria-label="${t('col.status')}">${opts.join('')}</select>`;
 }
 
-function rowHtml({ node: n, showingAll }) {
+function rowHtml({ node: n, showingAll }, leaving = false, readOnly = false) {
   const hasKids = n.children.length > 0;
   const toggle = hasKids
     ? `<button class="toggle" data-action="toggle" data-all="${showingAll}" aria-label="${t('action.toggle')}">${showingAll ? '▾' : '▸'}</button>`
@@ -149,7 +227,7 @@ function rowHtml({ node: n, showingAll }) {
     : '';
 
   const isStopped = n.blocking_status === 'stopped';
-  const actions = `
+  const actions = readOnly ? '' : `
     ${isStopped ? `<button class="icon resume" data-action="resume" title="${t('action.resume')}">${ICON.play}${t('action.resume')}</button>` : ''}
     ${!n.paused && n.status !== 'done' ? `<button class="icon" data-action="pause" title="${t('action.pause')}" aria-label="${t('action.pause')}">${ICON.pause}</button>` : ''}
     <button class="icon" data-action="add" title="${t('action.addSub')}" aria-label="${t('action.addSub')}">${ICON.plus}</button>
@@ -157,7 +235,7 @@ function rowHtml({ node: n, showingAll }) {
     <button class="icon danger" data-action="delete" title="${t('action.delete')}" aria-label="${t('action.delete')}">${ICON.trash}</button>`;
 
   return `
-    <tr class="st-${n.status} ${n.paused ? 'paused' : ''}" data-id="${n.id}">
+    <tr class="st-${n.status} ${n.paused ? 'paused' : ''} ${leaving ? 'leaving' : ''}" data-id="${n.id}">
       <td>
         <div class="title-wrap" style="padding-left:${n.depth * 22}px">
           ${toggle}
@@ -169,7 +247,7 @@ function rowHtml({ node: n, showingAll }) {
       <td>${n.due_date ? fmtDate(n.due_date) : '<span class="muted">—</span>'}</td>
       <td>${n.reminder_days != null ? t('days.short', { n: n.reminder_days }) : '<span class="muted">—</span>'}</td>
       <td title="${esc(n.assignee_email)}">${esc(n.assignee_email) || '<span class="muted">—</span>'}</td>
-      <td>${statusCell(n)}</td>
+      <td>${statusCell(n, readOnly)}</td>
       <td class="actions">${actions}</td>
     </tr>`;
 }
@@ -178,27 +256,183 @@ function render() {
   renderFilters();
   const f = state.filters[state.view];
   const today = todayISO();
-  const roots = rootsFor(state.view, state.forest);
+  let roots = rootsFor(state.view, state.forest);
+  if (state.view === 'main' && state.leaving.size) {
+    roots = state.forest.roots.filter(r => r.status !== 'done' || state.leaving.has(r.id));
+  }
+  roots = filterRootsByProject(roots, f.projects);
   const filterActive = isFilterActive(f);
+  const rowFilterActive = isRowFilterActive(f);
   const visible = computeVisible(roots, f, state.view, today);
-  const rows = flatten(roots, { filterActive, visible, collapsed: state.collapsed, expanded: state.expanded });
+  const shownRoots = rowFilterActive ? roots.filter(r => visible.has(r.id)) : roots;
+  // sem filtro de linha, a tela principal mostra todos os projetos cadastrados (mesmo vazios)
+  const groups = groupByProject(shownRoots, state.projects, {
+    selected: f.projects,
+    includeEmpty: state.view === 'main' && !rowFilterActive,
+  });
 
-  $('#rows').innerHTML = rows.map(rowHtml).join('');
+  const leavingIds = new Set();
+  if (state.view === 'main') {
+    state.leaving.forEach(id => {
+      const r = state.forest.byId.get(id);
+      if (r) [r, ...descendants(r)].forEach(n => leavingIds.add(n.id));
+    });
+  }
+  let html = '';
+  for (const g of groups) {
+    const open = !state.collapsedProjects.has(g.key);
+    html += projectRowHtml(g, open);
+    if (!open) continue;
+    const rows = flatten(g.roots, { filterActive: rowFilterActive, visible, collapsed: state.collapsed, expanded: state.expanded });
+    html += rows.length
+      ? rows.map(r => rowHtml(r, leavingIds.has(r.node.id), g.project ? !canEditProject(g.project) : false)).join('')
+      : `<tr class="proj-empty"><td colspan="8">${t('proj.empty')}</td></tr>`;
+  }
+  $('#rows').innerHTML = html;
   const empty = $('#empty');
-  empty.hidden = rows.length > 0;
+  empty.hidden = groups.length > 0;
   empty.textContent = t(filterActive ? 'empty.filtered' : state.view === 'history' ? 'empty.history' : 'empty.main');
 }
 
+function projectRowHtml(g, open) {
+  const p = g.project;
+  const name = p ? p.name : t('proj.none');
+  const canAdd = state.view === 'main' && (!p || canEditProject(p));
+  const owner = isOwner(p);
+  const actions = `
+    ${canAdd ? `<button class="icon" data-action="proj-add" title="${t('proj.addTask')}" aria-label="${t('proj.addTask')}">${ICON.plus}</button>` : ''}
+    ${owner ? `<button class="icon" data-action="proj-edit" title="${t('proj.edit')}" aria-label="${t('proj.edit')}">${ICON.share}</button>
+    <button class="icon danger" data-action="proj-delete" title="${t('proj.delete')}" aria-label="${t('proj.delete')}">${ICON.trash}</button>` : ''}`;
+  const shared = p ? state.members.filter(m => m.project_id === p.id) : [];
+  const badge = !p ? ''
+    : owner ? (shared.length ? `<span class="badge share" title="${esc(shared.map(m => userEmail(m.user_id)).join(', '))}">${t('share.sharedWith', { n: shared.length })}</span>` : '')
+    : `<span class="badge share">${esc(t('share.from', { email: userEmail(p.owner_id) }))} · ${t(myRole(p) === 'editor' ? 'share.roleEditor' : 'share.roleViewer')}</span>`;
+  return `
+    <tr class="proj-row" data-project="${esc(g.key)}">
+      <td colspan="8">
+        <div class="proj-head">
+          <button class="toggle" data-action="proj-toggle" aria-expanded="${open}" aria-label="${t('action.toggle')}">${open ? '▾' : '▸'}</button>
+          <span class="proj-name">${esc(name)}</span>
+          <span class="proj-count">${g.roots.length}</span>
+          ${badge}
+          <span class="spacer"></span>
+          <span class="actions">${actions}</span>
+        </div>
+      </td>
+    </tr>`;
+}
+
+// ---------- projetos ----------
+async function projectForm(project = null) {
+  await loadUsers();   // pega usuários criados depois do login
+  const others = state.users.filter(u => u.id !== state.userId);
+  const current = id => state.members.find(m => m.project_id === project?.id && m.user_id === id)?.role ?? '';
+  const roleSelect = u => `
+    <select name="role" data-user="${esc(u.id)}" aria-label="${esc(u.email)}">
+      <option value="">${t('share.none')}</option>
+      <option value="viewer" ${current(u.id) === 'viewer' ? 'selected' : ''}>${t('share.roleViewer')}</option>
+      <option value="editor" ${current(u.id) === 'editor' ? 'selected' : ''}>${t('share.roleEditor')}</option>
+    </select>`;
+  const shareHtml = others.length ? `
+      <table class="mini share-table">
+        <thead><tr><th>${t('share.user')}</th><th style="width:210px">${t('share.access')}</th></tr></thead>
+        <tbody>${others.map(u => `<tr><td>${esc(u.email)}</td><td>${roleSelect(u)}</td></tr>`).join('')}</tbody>
+      </table>` : `<p class="muted">${t('share.noUsers')}</p>`;
+
+  const done = openDialog(t(project ? 'proj.editTitle' : 'proj.newTitle'), `
+    <form id="proj-form" style="display:grid;gap:14px">
+      <label>${t('proj.name')}<input name="name" required maxlength="120" value="${esc(project?.name)}" placeholder="${t('proj.placeholder')}"></label>
+      <fieldset>
+        <legend>${t('share.title')}</legend>
+        <p class="muted small">${t('share.hint')}</p>
+        ${shareHtml}
+      </fieldset>
+      <div class="m-actions">
+        <button type="button" data-close>${t('btn.cancel')}</button>
+        <button class="primary">${t('btn.save')}</button>
+      </div>
+    </form>`);
+  const form = dlg.querySelector('#proj-form');
+  form.name.focus();
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const name = form.name.value.trim();
+    let projectId = project?.id;
+    if (project) {
+      const { error } = await sb.from('projects').update({ name }).eq('id', projectId);
+      if (error) return fail(error);
+    } else {
+      const { data, error } = await sb.from('projects').insert({ name }).select('id').single();
+      if (error) return fail(error);
+      projectId = data.id;
+      project = { id: projectId, name };   // se o compartilhamento falhar, tentar de novo não duplica
+    }
+
+    // compartilhamento: grava o que foi escolhido e remove o que foi desmarcado
+    const wanted = [...form.querySelectorAll('select[name=role]')]
+      .map(sel => ({ user_id: sel.dataset.user, role: sel.value }));
+    const keep = wanted.filter(w => w.role).map(w => ({ project_id: projectId, ...w }));
+    const drop = wanted.filter(w => !w.role).map(w => w.user_id);
+    if (keep.length) {
+      const { error } = await sb.from('project_members').upsert(keep);
+      if (error) return fail(error);
+    }
+    if (drop.length) {
+      const { error } = await sb.from('project_members').delete().eq('project_id', projectId).in('user_id', drop);
+      if (error) return fail(error);
+    }
+    dlg.close();
+  });
+  await done;
+  await loadTasks();
+}
+
+async function deleteProject(project) {
+  const n = state.forest.roots.filter(r => r.project_id === project.id).length;
+  const msg = n ? t('proj.confirmDelete', { name: project.name, n }) : t('proj.confirmDeleteEmpty', { name: project.name });
+  if (!confirm(msg)) return;
+  const { error } = await sb.rpc('delete_project', { p_id: project.id });
+  if (error) return fail(error);
+  const f = state.filters;
+  f.main.projects = f.main.projects.filter(id => id !== project.id);
+  f.history.projects = f.history.projects.filter(id => id !== project.id);
+  await loadTasks();
+}
+
+// projeto sugerido para uma tarefa nova: o do filtro, se só um estiver marcado
+function defaultProjectId() {
+  const sel = state.filters.main.projects;
+  const p = sel.length === 1 && state.projects.find(x => x.id === sel[0]);
+  return p && canEditProject(p) ? p.id : null;
+}
+
+async function loadUsers() {
+  const { data, error } = await sb.rpc('list_users');
+  if (error) return fail(error);
+  state.users = data;
+}
+
 // ---------- formulário de tarefa ----------
-async function taskForm({ task = null, parentId = null }) {
+async function taskForm({ task = null, parentId = null, projectId = null }) {
   const parent = parentId && state.forest.byId.get(parentId);
   const title = t(task ? 'form.editTitle' : parent ? 'form.newSubTitle' : 'form.newTitle');
   const v = task || {};   // valores atuais (vazio = nova tarefa)
+  const isRoot = task ? !task.parent_id : !parent;   // só a raiz escolhe projeto
+  const currentProject = task ? task.project_id : projectId;
+  const projectField = isRoot ? `
+      <label>${t('form.project')}
+        <select name="project_id">
+          <option value="">${t('proj.none')}</option>
+          ${state.projects.filter(canEditProject).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+            .map(p => `<option value="${esc(p.id)}" ${p.id === currentProject ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+        </select>
+      </label>` : '';
 
   const done = openDialog(title, `
     ${parent ? `<p class="path">${esc(t('form.inside', { path: [...ancestors(parent), parent].map(a => a.title).join(' › ') }))}</p>` : ''}
     <form id="task-form" class="grid-form" style="display:grid;gap:12px">
       <label>${t('form.task')}<input name="title" required maxlength="300" value="${esc(v.title)}"></label>
+      ${projectField}
       <label>${t('form.notes')}<textarea name="notes">${esc(v.notes)}</textarea></label>
       <div class="grid2">
         <label>${t('form.due')}<input type="date" name="due_date" value="${esc(v.due_date)}"></label>
@@ -223,6 +457,7 @@ async function taskForm({ task = null, parentId = null }) {
       assignee_email: fd.get('assignee_email').trim() || null,
       priority: fd.get('priority') === 'on',
     };
+    if (isRoot) payload.project_id = fd.get('project_id') || null;
     const { error } = task
       ? await sb.from('tasks').update(payload).eq('id', task.id)
       : await sb.from('tasks').insert({ ...payload, parent_id: parentId });
@@ -486,11 +721,7 @@ async function reminderPopup(p) {
 
 // ---------- eventos ----------
 function bindUi() {
-  document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
-    state.view = tab.dataset.view;
-    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
-    render();
-  }));
+  document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => switchView(tab.dataset.view)));
 
   const setFilter = (key, value) => { state.filters[state.view][key] = value; state.expanded.clear(); render(); };
   $('#f-priority').addEventListener('change', e => setFilter('priority', e.target.value));
@@ -502,11 +733,39 @@ function bindUi() {
     render();
   });
 
-  $('#new-task').addEventListener('click', async () => { await taskForm({}); await afterChange(); });
+  $('#new-task').addEventListener('click', async () => { await taskForm({ projectId: defaultProjectId() }); await afterChange(); });
+  $('#new-project').addEventListener('click', () => projectForm());
+
+  const projBox = $('#f-projects');
+  projBox.addEventListener('change', e => {
+    if (e.target.type !== 'checkbox') return;
+    const checked = [...projBox.querySelectorAll('input:checked')].map(i => i.value);
+    setFilter('projects', checked);
+  });
+  projBox.addEventListener('click', e => {
+    if (e.target.closest('[data-clear-projects]')) setFilter('projects', []);
+  });
+  document.addEventListener('click', e => { if (!projBox.contains(e.target)) projBox.open = false; });
 
   $('#rows').addEventListener('click', async e => {
     const btn = e.target.closest('button[data-action]');
     if (!btn) return;
+    const projRow = btn.closest('tr.proj-row');
+    if (projRow) {
+      const key = projRow.dataset.project;
+      const project = state.projects.find(p => p.id === key);
+      switch (btn.dataset.action) {
+        case 'proj-toggle':
+          if (state.collapsedProjects.has(key)) state.collapsedProjects.delete(key);
+          else state.collapsedProjects.add(key);
+          render();
+          break;
+        case 'proj-add': await taskForm({ projectId: project?.id ?? null }); await afterChange(); break;
+        case 'proj-edit': if (project) await projectForm(project); break;
+        case 'proj-delete': if (project) await deleteProject(project); break;
+      }
+      return;
+    }
     const node = state.forest.byId.get(btn.closest('tr').dataset.id);
     switch (btn.dataset.action) {
       case 'toggle':
@@ -562,8 +821,14 @@ async function onSession(session) {
   $('#login').hidden = !!session;
   $('#app').hidden = !session;
   clearInterval(refreshTimer);
+  // outro usuário: começa do zero (não mistura dados nem avisos)
+  state.forest = { byId: new Map(), roots: [] };
+  state.projects = []; state.members = []; state.users = [];
+  state.filters = { main: { ...DEFAULT_FILTERS }, history: { ...DEFAULT_FILTERS } };
+  state.userId = session?.user?.id ?? null;
   if (!session) return;
   $('#user-email').textContent = session.user.email;
+  await loadUsers();
   await runAutomations();
   refreshTimer = setInterval(runAutomations, REFRESH_MINUTES * 60 * 1000);
 }

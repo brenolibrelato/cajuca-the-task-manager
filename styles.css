@@ -1,7 +1,7 @@
 :root {
-  /* cores da marca: preto do logo, laranja dos traços, creme da ponta da cauda */
+  /* cores da marca: preto do logo, azul claro dos traços, creme da ponta da cauda */
   --brand-ink: #1a1819;
-  --brand-orange: #fbaa3c;
+  --brand-blue: #5bb8f5;
   --brand-cream: #faf7f3;
 
   --bg: var(--brand-cream);
@@ -9,10 +9,10 @@
   --text: var(--brand-ink);
   --muted: #6e6966;
   --border: #ebe5dd;
-  --accent: var(--brand-orange);
-  --accent-hover: #f29a1f;
+  --accent: var(--brand-blue);
+  --accent-hover: #3fa6ec;
   --accent-text: var(--brand-ink);
-  --accent-ink: #9a5b00;      /* laranja escuro: texto laranja legível no fundo claro */
+  --accent-ink: #1667a3;      /* azul escuro: texto azul legível no fundo claro */
   --done-bg: #e8f5ec;
   --done-text: #1f7a3d;
   --late-bg: #fdecec;
@@ -32,10 +32,10 @@
     --text: #f0ece6;
     --muted: #a39d97;
     --border: #33302f;
-    --accent: var(--brand-orange);
-    --accent-hover: #fcb85a;
+    --accent: var(--brand-blue);
+    --accent-hover: #82c9f7;
     --accent-text: var(--brand-ink);
-    --accent-ink: var(--brand-orange);
+    --accent-ink: var(--brand-blue);
     --done-bg: #16291d;
     --done-text: #6ee79a;
     --late-bg: #301a1a;
@@ -53,10 +53,10 @@
   --text: #f0ece6;
   --muted: #a39d97;
   --border: #33302f;
-  --accent: var(--brand-orange);
-  --accent-hover: #fcb85a;
+  --accent: var(--brand-blue);
+  --accent-hover: #82c9f7;
   --accent-text: var(--brand-ink);
-  --accent-ink: var(--brand-orange);
+  --accent-ink: var(--brand-blue);
   --done-bg: #16291d;
   --done-text: #6ee79a;
   --late-bg: #301a1a;
@@ -264,14 +264,15 @@ tr.paused td.actions { opacity: 1; }
 .actions { text-align: right; white-space: nowrap; }
 
 /* faixa do projeto */
-/* faixa do projeto no amarelo da marca; texto e ícones no preto da marca (legíveis nos dois temas) */
-tr.proj-row td { background: var(--brand-orange); color: var(--brand-ink); padding: 6px 10px; }
-tbody tr.proj-row:hover td { background: var(--brand-orange); }
+/* faixa do projeto: fundo levemente azulado + borda azul à esquerda (discreto nos dois temas) */
+tr.proj-row td { background: color-mix(in srgb, var(--brand-blue) 12%, var(--surface)); color: var(--text); padding: 6px 10px; }
+tbody tr.proj-row:hover td { background: color-mix(in srgb, var(--brand-blue) 18%, var(--surface)); }
+tr.proj-row td:first-child { box-shadow: inset 4px 0 0 var(--brand-blue); }
 tr.proj-row .toggle,
-tr.proj-row button.icon { color: var(--brand-ink); }
-tr.proj-row button.icon:hover { background: rgba(26, 24, 25, .12); color: var(--brand-ink); }
-tr.proj-row .badge { background: rgba(255, 255, 255, .45); color: var(--brand-ink); }
-tr.proj-row .proj-count { background: rgba(255, 255, 255, .6); color: var(--brand-ink); }
+tr.proj-row button.icon { color: var(--muted); }
+tr.proj-row button.icon:hover { background: var(--badge-bg); color: var(--text); }
+tr.proj-row .badge { background: var(--surface); color: var(--muted); }
+tr.proj-row .proj-count { background: var(--brand-blue); color: var(--brand-ink); }
 tr.proj-row:not(:first-child) td { border-top: 6px solid var(--bg); }
 .proj-head { display: flex; align-items: center; gap: 6px; }
 .proj-name { font-weight: 600; }

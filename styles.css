@@ -1,7 +1,8 @@
 :root {
-  /* cores da marca: preto do logo, azul claro dos traços, creme da ponta da cauda */
+  /* cores da marca: preto do logo, verde-água dos traços, creme da ponta da cauda */
   --brand-ink: #1a1819;
-  --brand-blue: #5bb8f5;
+  --brand-teal: #3ec6bd;
+  --brand-teal-light: #c5eeeb;   /* versão clara: faixas de projeto */
   --brand-cream: #faf7f3;
 
   --bg: var(--brand-cream);
@@ -9,10 +10,10 @@
   --text: var(--brand-ink);
   --muted: #6e6966;
   --border: #ebe5dd;
-  --accent: var(--brand-blue);
-  --accent-hover: #3fa6ec;
+  --accent: var(--brand-teal);
+  --accent-hover: #33b3aa;
   --accent-text: var(--brand-ink);
-  --accent-ink: #1667a3;      /* azul escuro: texto azul legível no fundo claro */
+  --accent-ink: #137a73;      /* verde-água escuro: texto legível no fundo claro */
   --done-bg: #e8f5ec;
   --done-text: #1f7a3d;
   --late-bg: #fdecec;
@@ -32,10 +33,10 @@
     --text: #f0ece6;
     --muted: #a39d97;
     --border: #33302f;
-    --accent: var(--brand-blue);
-    --accent-hover: #82c9f7;
+    --accent: var(--brand-teal);
+    --accent-hover: #63d4cc;
     --accent-text: var(--brand-ink);
-    --accent-ink: var(--brand-blue);
+    --accent-ink: var(--brand-teal);
     --done-bg: #16291d;
     --done-text: #6ee79a;
     --late-bg: #301a1a;
@@ -53,10 +54,10 @@
   --text: #f0ece6;
   --muted: #a39d97;
   --border: #33302f;
-  --accent: var(--brand-blue);
-  --accent-hover: #82c9f7;
+  --accent: var(--brand-teal);
+  --accent-hover: #63d4cc;
   --accent-text: var(--brand-ink);
-  --accent-ink: var(--brand-blue);
+  --accent-ink: var(--brand-teal);
   --done-bg: #16291d;
   --done-text: #6ee79a;
   --late-bg: #301a1a;
@@ -264,15 +265,15 @@ tr.paused td.actions { opacity: 1; }
 .actions { text-align: right; white-space: nowrap; }
 
 /* faixa do projeto */
-/* faixa do projeto: fundo levemente azulado + borda azul à esquerda (discreto nos dois temas) */
-tr.proj-row td { background: color-mix(in srgb, var(--brand-blue) 12%, var(--surface)); color: var(--text); padding: 6px 10px; }
-tbody tr.proj-row:hover td { background: color-mix(in srgb, var(--brand-blue) 18%, var(--surface)); }
-tr.proj-row td:first-child { box-shadow: inset 4px 0 0 var(--brand-blue); }
+/* faixa do projeto: verde-água claro com borda na cor da marca; texto no preto da marca (legível nos dois temas) */
+tr.proj-row td { background: var(--brand-teal-light); color: var(--brand-ink); padding: 6px 10px; }
+tbody tr.proj-row:hover td { background: var(--brand-teal-light); }
+tr.proj-row td:first-child { box-shadow: inset 4px 0 0 var(--brand-teal); }
 tr.proj-row .toggle,
-tr.proj-row button.icon { color: var(--muted); }
-tr.proj-row button.icon:hover { background: var(--badge-bg); color: var(--text); }
-tr.proj-row .badge { background: var(--surface); color: var(--muted); }
-tr.proj-row .proj-count { background: var(--brand-blue); color: var(--brand-ink); }
+tr.proj-row button.icon { color: var(--brand-ink); }
+tr.proj-row button.icon:hover { background: rgba(26, 24, 25, .1); color: var(--brand-ink); }
+tr.proj-row .badge { background: rgba(255, 255, 255, .6); color: var(--brand-ink); }
+tr.proj-row .proj-count { background: var(--brand-teal); color: var(--brand-ink); }
 tr.proj-row:not(:first-child) td { border-top: 6px solid var(--bg); }
 .proj-head { display: flex; align-items: center; gap: 6px; }
 .proj-name { font-weight: 600; }

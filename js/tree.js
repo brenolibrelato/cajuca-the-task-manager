@@ -124,9 +124,10 @@ export function matches(node, f, view, today) {
   if (f.priority === 'yes' && !node.priority) return false;
   if (f.priority === 'no' && node.priority) return false;
 
+  const who = node.assignees || [];
   if (f.assignee === '__none__') {
-    if (node.assignee_email) return false;
-  } else if (f.assignee && node.assignee_email !== f.assignee) {
+    if (who.length) return false;
+  } else if (f.assignee && !who.includes(f.assignee)) {
     return false;
   }
 

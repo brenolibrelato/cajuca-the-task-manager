@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict';
 import {
   buildForest, rootsFor, computeVisible, flatten, toggleNode, todayISO, addDays,
-  DEFAULT_FILTERS, isFilterActive, isRowFilterActive, groupByProject, filterRootsByProject, NO_PROJECT,
+  DEFAULT_FILTERS, isFilterActive, isRowFilterActive, groupByProject, filterRootsByProject, NO_PROJECT, matches,
 } from '../js/tree.js';
 
 const today = todayISO();
 const t = (id, parent_id, extra = {}) => ({
   id, parent_id, title: id, priority: false, due_date: null, status: 'not_started',
-  assignee_email: null, completed_at: null, blocking_status: null, created_at: id, ...extra,
+  assignees: [], completed_at: null, blocking_status: null, created_at: id, ...extra,
 });
 
 const tasks = [
   t('P', null),                                                   // projeto
-  t('P.1', 'P', { due_date: addDays(today, 3), assignee_email: 'ana@x.com' }),
+  t('P.1', 'P', { due_date: addDays(today, 3), assignees: ['ana@x.com', 'Carlos'] }),
   t('P.1.a', 'P.1', { due_date: addDays(today, 40) }),
   t('P.2', 'P', { due_date: addDays(today, 20), priority: true }),
   t('P.2.a', 'P.2', { due_date: addDays(today, -2), status: 'overdue' }),
@@ -54,6 +54,11 @@ assert.deepEqual(ids(view('main', f7, new Set(), new Set(['P.1']))), ['P', 'P.2'
 // AND: prazo 7 + responsável ana -> só P.1 (e ancestral); atrasada sem ana não aparece
 const fAnd = { ...DEFAULT_FILTERS, period: '7', assignee: 'ana@x.com' };
 assert.deepEqual(ids(view('main', fAnd)), ['P', 'P.1']);
+
+// vários responsáveis: qualquer um deles bate; "sem responsável" pega lista vazia
+assert.deepEqual(ids(view('main', { ...DEFAULT_FILTERS, assignee: 'Carlos' })), ['P', 'P.1']);
+assert.equal(matches(forest.byId.get('P.1'), { ...DEFAULT_FILTERS, assignee: '__none__' }, 'main', today), false);
+assert.equal(matches(forest.byId.get('P.1.a'), { ...DEFAULT_FILTERS, assignee: '__none__' }, 'main', today), true);
 
 // prioridade
 assert.deepEqual(ids(view('main', { ...DEFAULT_FILTERS, priority: 'yes' })), ['P', 'P.2']);

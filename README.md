@@ -19,7 +19,7 @@ O Cajuca é um gestor de tarefas hierárquico: cada tarefa pode ter subtarefas i
 - **Retomada** de tarefas paradas, com revisão de prazos e status
 - **Histórico** com as árvores de tarefas concluídas
 - **Filtros** por prioridade, período e responsável
-- **Responsável** por tarefa, identificado por e-mail
+- **Responsáveis** por tarefa: um ou vários, escolhidos entre os usuários cadastrados ou escritos livremente
 - **Bilíngue**: português e inglês, à escolha do usuário
 - **Tema claro e escuro** automático
 - **Acesso restrito** com login

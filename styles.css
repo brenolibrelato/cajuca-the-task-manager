@@ -194,6 +194,11 @@ details.multi[open] summary { border-color: var(--muted); }
 .multi-panel button { margin-top: 4px; font-size: 13px; }
 .spacer { flex: 1; }
 
+/* responsáveis: texto livre + aba de usuários (abre dentro do formulário) */
+.assignee-field { display: grid; gap: 4px; font-size: 13px; color: var(--muted); grid-column: 1 / -1; }
+.assignee-field details.multi summary { max-width: none; }
+.assignee-field .multi-panel { position: static; margin-top: 4px; max-height: 200px; box-shadow: none; }
+
 /* ---------- tabela ---------- */
 .table-wrap { padding: 0 16px 32px; overflow-x: auto; }
 table.tasks {

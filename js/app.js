@@ -179,11 +179,11 @@ function renderFilters() {
     .map(([v, k]) => `<option value="${v}">${t(k)}</option>`).join('');
   $('#f-period').value = f.period;
 
-  const emails = [...new Set([...state.forest.byId.values()].map(t => t.assignee_email).filter(Boolean))].sort();
+  const emails = [...new Set([...state.forest.byId.values()].flatMap(t => t.assignees || []))]
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   $('#f-assignee').innerHTML = `<option value="">${t('filter.everyone')}</option><option value="__none__">${t('filter.noAssignee')}</option>`
     + emails.map(e => `<option value="${esc(e)}">${esc(e)}</option>`).join('');
   $('#f-assignee').value = f.assignee;
-  $('#assignees').innerHTML = emails.map(e => `<option value="${esc(e)}">`).join('');
 
   renderProjectFilter(f);
   $('#f-clear').hidden = !isFilterActive(f);
@@ -248,7 +248,7 @@ function rowHtml({ node: n, showingAll }, leaving = false, readOnly = false) {
       <td${ed('priority')}>${n.priority ? `<span class="prio-yes">${t('yes')}</span>` : `<span class="muted">${t('no')}</span>`}</td>
       <td${ed('due_date')}>${n.due_date ? fmtDate(n.due_date) : '<span class="muted">—</span>'}</td>
       <td${ed('reminder_days')}>${n.reminder_days != null ? t('days.short', { n: n.reminder_days }) : '<span class="muted">—</span>'}</td>
-      <td title="${esc(n.assignee_email)}"${ed('assignee_email')}>${esc(n.assignee_email) || '<span class="muted">—</span>'}</td>
+      <td title="${esc(fmtAssignees(n.assignees))}"${ed('assignees')}>${esc(fmtAssignees(n.assignees)) || '<span class="muted">—</span>'}</td>
       <td>${statusCell(n, readOnly)}</td>
       <td class="actions">${actions}</td>
     </tr>`;
@@ -416,6 +416,7 @@ async function loadUsers() {
 
 // ---------- edição direta na tabela ----------
 function startInlineEdit(cell, node, field) {
+  if (field === 'assignees') { editAssignees(node); return; }   // abre janela com a lista
   const v = node[field];
   let html;
   switch (field) {
@@ -429,8 +430,6 @@ function startInlineEdit(cell, node, field) {
       html = `<input class="cell-edit" type="date" value="${esc(v)}">`; break;
     case 'reminder_days':
       html = `<input class="cell-edit" type="number" min="0" value="${esc(v)}">`; break;
-    case 'assignee_email':
-      html = `<input class="cell-edit" type="email" list="assignees" value="${esc(v)}">`; break;
     default: return;
   }
   state.editing = true;
@@ -478,12 +477,93 @@ function readInlineValue(field, raw) {
       const n = Math.floor(Number(s));
       return Number.isFinite(n) && n >= 0 ? n : undefined;
     }
-    case 'assignee_email': return s || null;
   }
+}
+
+// ---------- responsáveis ----------
+// "Ana, joao@x.com; Ana" -> ['Ana', 'joao@x.com'] (sem vazios nem repetidos)
+function parseAssignees(raw) {
+  const seen = new Set();
+  return String(raw ?? '').split(/[,;\n]/).map(s => s.trim()).filter(s => {
+    const k = s.toLowerCase();
+    if (!s || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+const fmtAssignees = list => (list || []).join(', ');
+
+// Campo de texto livre + aba com checkboxes dos usuários cadastrados.
+// O texto é a fonte da verdade; marcar/desmarcar só acrescenta ou tira o e-mail dele.
+function assigneeField(name, list = []) {
+  const emails = state.users.map(u => u.email);
+  const sel = new Set((list || []).map(s => s.toLowerCase()));
+  return `
+    <div class="assignee-field" data-assignees>
+      <span>${t('form.assignee')}</span>
+      <input name="${name}" autocomplete="off" maxlength="2000" value="${esc(fmtAssignees(list))}" placeholder="${t('form.assigneeHint')}">
+      <details class="multi">
+        <summary></summary>
+        <div class="multi-panel">
+          ${emails.length
+            ? emails.map(e => `<label class="chk"><input type="checkbox" value="${esc(e)}" ${sel.has(e.toLowerCase()) ? 'checked' : ''}> ${esc(e)}</label>`).join('')
+            : `<p class="muted">${t('share.noUsers')}</p>`}
+        </div>
+      </details>
+    </div>`;
+}
+
+function bindAssigneeField(root) {
+  root.querySelectorAll('[data-assignees]').forEach(box => {
+    const input = box.querySelector('input[name]');
+    const checks = [...box.querySelectorAll('input[type=checkbox]')];
+    const summary = box.querySelector('summary');
+    const sync = () => {
+      const sel = new Set(parseAssignees(input.value).map(s => s.toLowerCase()));
+      checks.forEach(c => { c.checked = sel.has(c.value.toLowerCase()); });
+      const n = checks.filter(c => c.checked).length;
+      summary.textContent = n ? t('form.pickUsersN', { n }) : t('form.pickUsers');
+    };
+    checks.forEach(c => c.addEventListener('change', () => {
+      const list = parseAssignees(input.value).filter(s => s.toLowerCase() !== c.value.toLowerCase());
+      input.value = fmtAssignees(c.checked ? [...list, c.value] : list);
+      sync();
+    }));
+    input.addEventListener('input', sync);
+    sync();
+  });
+}
+
+// Clique na célula "Responsável": janela só com o campo de responsáveis
+async function editAssignees(node) {
+  await loadUsers();
+  let changed = false;
+  const done = openDialog(t('form.assigneesTitle'), `
+    ${pathHtml(node)}
+    <p><strong>${esc(node.title)}</strong></p>
+    <form id="who-form" style="display:grid;gap:12px">
+      ${assigneeField('assignees', node.assignees)}
+      <div class="m-actions">
+        <button type="button" data-close>${t('btn.cancel')}</button>
+        <button class="primary">${t('btn.save')}</button>
+      </div>
+    </form>`);
+  bindAssigneeField(dlg);
+  dlg.querySelector('#who-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const { error } = await sb.from('tasks')
+      .update({ assignees: parseAssignees(e.target.assignees.value) }).eq('id', node.id);
+    if (error) return fail(error);
+    changed = true;
+    dlg.close();
+  });
+  await done;
+  if (changed) await afterChange();
 }
 
 // ---------- formulário de tarefa ----------
 async function taskForm({ task = null, parentId = null, projectId = null }) {
+  await loadUsers();   // inclui usuários criados depois do login
   const parent = parentId && state.forest.byId.get(parentId);
   const title = t(task ? 'form.editTitle' : parent ? 'form.newSubTitle' : 'form.newTitle');
   const v = task || {};   // valores atuais (vazio = nova tarefa)
@@ -507,14 +587,15 @@ async function taskForm({ task = null, parentId = null, projectId = null }) {
       <div class="grid2">
         <label>${t('form.due')}<input type="date" name="due_date" value="${esc(v.due_date)}"></label>
         <label>${t('form.reminder')}<input type="number" name="reminder_days" min="0" value="${esc(v.reminder_days)}"></label>
-        <label>${t('form.assignee')}<input type="email" name="assignee_email" list="assignees" value="${esc(v.assignee_email)}"></label>
         <label class="chk"><input type="checkbox" name="priority" ${v.priority ? 'checked' : ''}> ${t('form.priority')}</label>
+        ${assigneeField('assignees', v.assignees)}
       </div>
       <div class="m-actions">
         <button type="button" data-close>${t('btn.cancel')}</button>
         <button class="primary">${t('btn.save')}</button>
       </div>
     </form>`);
+  bindAssigneeField(dlg);
 
   dlg.querySelector('#task-form').addEventListener('submit', async e => {
     e.preventDefault();
@@ -524,7 +605,7 @@ async function taskForm({ task = null, parentId = null, projectId = null }) {
       notes: fd.get('notes').trim() || null,
       due_date: fd.get('due_date') || null,
       reminder_days: fd.get('reminder_days') === '' ? null : Number(fd.get('reminder_days')),
-      assignee_email: fd.get('assignee_email').trim() || null,
+      assignees: parseAssignees(fd.get('assignees')),
       priority: fd.get('priority') === 'on',
     };
     if (isRoot) payload.project_id = fd.get('project_id') || null;
@@ -656,12 +737,13 @@ async function overduePopup(p) {
       <label>${t('overdue.planTask')}<input name="plan_title" required maxlength="300"></label>
       <div class="grid2">
         <label>${t('form.due')}<input type="date" name="due" required min="${today}"></label>
-        <label>${t('form.assignee')}<input type="email" name="assignee" list="assignees" value="${esc(node.assignee_email)}"></label>
         <label>${t('form.reminder')}<input type="number" name="reminder_days" min="0"></label>
+        ${assigneeField('assignee', node.assignees)}
       </div>
       <p class="muted">${t('overdue.planHint')}</p>
       <div class="m-actions"><button class="primary">${t('overdue.planSubmit')}</button></div>
     </form>`, { mandatory: true });
+  bindAssigneeField(dlg);
 
   dlg.querySelectorAll('[data-mode]').forEach(btn => btn.addEventListener('click', () => {
     dlg.querySelectorAll('[data-mode]').forEach(b => b.classList.toggle('selected', b === btn));
@@ -680,7 +762,7 @@ async function overduePopup(p) {
     const f = e.target;
     const { data: planId, error } = await sb.rpc('create_action_plan', {
       p_parent: node.id, p_title: f.plan_title.value.trim(), p_due: f.due.value,
-      p_assignee: f.assignee.value.trim() || null,
+      p_assignees: parseAssignees(f.assignee.value),
     });
     if (error) return fail(error);
     if (f.reminder_days.value !== '') {
@@ -782,7 +864,7 @@ async function reminderPopup(p) {
   const done = openDialog(t('rem.title'), `
     ${pathHtml(node)}
     <p><strong>${esc(node.title)}</strong> ${when} (${fmtDate(p.due_date)}).</p>
-    ${node.assignee_email ? `<p class="muted">${esc(t('rem.assignee', { email: node.assignee_email }))}</p>` : ''}
+    ${node.assignees?.length ? `<p class="muted">${esc(t('rem.assignee', { email: fmtAssignees(node.assignees) }))}</p>` : ''}
     <div class="m-actions"><button class="primary" data-close>${t('btn.ok')}</button></div>`);
   await done;   // fechar de qualquer jeito conta como "exibido"
   const { error } = await sb.rpc('ack_reminder', { p_task: node.id });

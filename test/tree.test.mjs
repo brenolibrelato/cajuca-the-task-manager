@@ -98,6 +98,11 @@ assert.deepEqual(keys(groupByProject(pf.roots, projects, { includeEmpty: true, o
   ['let:A', 'lau:', 'gab:B', `${NO_PROJECT}:C,D`]);
 assert.deepEqual(keys(groupByProject(pf.roots, projects, { includeEmpty: true, order: ['lau'] })),
   ['lau:', 'gab:B', 'let:A', `${NO_PROJECT}:C,D`]);
+// "Sem projeto" também pode ser posicionado
+assert.deepEqual(keys(groupByProject(pf.roots, projects, { includeEmpty: true, order: [NO_PROJECT, 'let'] })),
+  [`${NO_PROJECT}:C,D`, 'let:A', 'gab:B', 'lau:']);
+assert.deepEqual(keys(groupByProject(pf.roots, projects, { includeEmpty: true, order: ['lau', NO_PROJECT] })),
+  ['lau:', `${NO_PROJECT}:C,D`, 'gab:B', 'let:A']);
 
 // checkbox: mais de um projeto; árvore inteira acompanha a raiz
 const sel = ['let', NO_PROJECT];

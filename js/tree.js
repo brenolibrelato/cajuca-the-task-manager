@@ -101,7 +101,18 @@ export function sortProjects(projects, order = []) {
   return [...projects].sort((a, b) => (at(a) - at(b)) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 }
 
-// Grupos na ordem: projetos (sortProjects), "Sem projeto" por último.
+// Ordem completa dos grupos, incluindo "Sem projeto" (que vai por último se não tiver posição)
+export function orderedKeys(projects, order = []) {
+  const keys = sortProjects(projects, order).map(p => p.id);
+  const i = order.indexOf(NO_PROJECT);
+  if (i < 0) return [...keys, NO_PROJECT];
+  const pos = new Map(order.map((id, j) => [id, j]));
+  const at = keys.findIndex(k => (pos.has(k) ? pos.get(k) : Infinity) > i);
+  keys.splice(at < 0 ? keys.length : at, 0, NO_PROJECT);
+  return keys;
+}
+
+// Grupos na ordem de orderedKeys.
 // includeEmpty: mostra também projetos cadastrados sem nenhuma árvore.
 export function groupByProject(roots, projects, { selected = [], includeEmpty = false, order = [] } = {}) {
   const byKey = new Map();
@@ -112,16 +123,22 @@ export function groupByProject(roots, projects, { selected = [], includeEmpty = 
   });
 
   const wanted = k => !selected.length || selected.includes(k);
-  const groups = sortProjects(projects, order)
-    .filter(p => wanted(p.id) && (includeEmpty || byKey.has(p.id)))
-    .map(p => ({ key: p.id, project: p, roots: byKey.get(p.id) || [] }));
+  const byId = new Map(projects.map(p => [p.id, p]));
 
   // tarefas sem projeto (ou de um projeto que não existe mais)
-  const known = new Set(projects.map(p => p.id));
   const orphans = [...byKey.entries()]
-    .filter(([k]) => k === NO_PROJECT || !known.has(k))
+    .filter(([k]) => k === NO_PROJECT || !byId.has(k))
     .flatMap(([, rs]) => rs);
-  if (orphans.length && wanted(NO_PROJECT)) groups.push({ key: NO_PROJECT, project: null, roots: orphans });
+
+  const groups = [];
+  for (const k of orderedKeys(projects, order)) {
+    if (!wanted(k)) continue;
+    if (k === NO_PROJECT) {
+      if (orphans.length) groups.push({ key: NO_PROJECT, project: null, roots: orphans });
+    } else if (includeEmpty || byKey.has(k)) {
+      groups.push({ key: k, project: byId.get(k), roots: byKey.get(k) || [] });
+    }
+  }
 
   return groups;
 }

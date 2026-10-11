@@ -563,7 +563,7 @@ async function editAssignees(node) {
 
 // ---------- formulário de tarefa ----------
 async function taskForm({ task = null, parentId = null, projectId = null }) {
-  await loadUsers();   // inclui usuários criados depois do login
+  await loadUsers();   // inclui usuários criados depois do login (e quem está criando vem como responsável)
   const parent = parentId && state.forest.byId.get(parentId);
   const title = t(task ? 'form.editTitle' : parent ? 'form.newSubTitle' : 'form.newTitle');
   const v = task || {};   // valores atuais (vazio = nova tarefa)
@@ -588,7 +588,7 @@ async function taskForm({ task = null, parentId = null, projectId = null }) {
         <label>${t('form.due')}<input type="date" name="due_date" value="${esc(v.due_date)}"></label>
         <label>${t('form.reminder')}<input type="number" name="reminder_days" min="0" value="${esc(v.reminder_days)}"></label>
         <label class="chk"><input type="checkbox" name="priority" ${v.priority ? 'checked' : ''}> ${t('form.priority')}</label>
-        ${assigneeField('assignees', v.assignees)}
+        ${assigneeField('assignees', task ? v.assignees : state.users.filter(u => u.id === state.userId).map(u => u.email))}
       </div>
       <div class="m-actions">
         <button type="button" data-close>${t('btn.cancel')}</button>

@@ -94,9 +94,16 @@ export function filterRootsByProject(roots, selected) {
   return roots.filter(r => selected.includes(projectKey(r)));
 }
 
-// Grupos na ordem: projetos por nome, "Sem projeto" por último.
+// Ordem dos projetos: a salva pelo usuário (order = ids) e, depois, os demais por nome.
+export function sortProjects(projects, order = []) {
+  const pos = new Map(order.map((id, i) => [id, i]));
+  const at = p => pos.has(p.id) ? pos.get(p.id) : Infinity;
+  return [...projects].sort((a, b) => (at(a) - at(b)) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+
+// Grupos na ordem: projetos (sortProjects), "Sem projeto" por último.
 // includeEmpty: mostra também projetos cadastrados sem nenhuma árvore.
-export function groupByProject(roots, projects, { selected = [], includeEmpty = false } = {}) {
+export function groupByProject(roots, projects, { selected = [], includeEmpty = false, order = [] } = {}) {
   const byKey = new Map();
   roots.forEach(r => {
     const k = projectKey(r);
@@ -105,8 +112,7 @@ export function groupByProject(roots, projects, { selected = [], includeEmpty = 
   });
 
   const wanted = k => !selected.length || selected.includes(k);
-  const sorted = [...projects].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
-  const groups = sorted
+  const groups = sortProjects(projects, order)
     .filter(p => wanted(p.id) && (includeEmpty || byKey.has(p.id)))
     .map(p => ({ key: p.id, project: p, roots: byKey.get(p.id) || [] }));
 

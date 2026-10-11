@@ -280,6 +280,14 @@ tr.proj-row button.icon:hover { background: rgba(26, 24, 25, .1); color: var(--b
 tr.proj-row .badge { background: rgba(255, 255, 255, .6); color: var(--brand-ink); }
 tr.proj-row .proj-count { background: var(--brand-teal); color: var(--brand-ink); }
 tr.proj-row:not(:first-child) td { border-top: 6px solid var(--bg); }
+
+/* arrastar e soltar projetos */
+tr.proj-row .drag-handle { cursor: grab; color: var(--brand-ink); opacity: .4; letter-spacing: -3px; padding-right: 3px; user-select: none; }
+tr.proj-row:hover .drag-handle { opacity: .85; }
+#rows.dragging-projects tr:not(.proj-row) { display: none; }
+tr.proj-row.dragging td { opacity: .45; }
+tr.proj-row.drop-before td { box-shadow: inset 4px 0 0 var(--brand-teal), inset 0 3px 0 var(--brand-ink); }
+tr.proj-row.drop-after td { box-shadow: inset 4px 0 0 var(--brand-teal), inset 0 -3px 0 var(--brand-ink); }
 .proj-head { display: flex; align-items: center; gap: 6px; }
 .proj-name { font-weight: 600; }
 .proj-count {

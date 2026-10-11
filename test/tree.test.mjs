@@ -93,6 +93,12 @@ assert.deepEqual(keys(groupByProject(pf.roots, projects)), ['gab:B', 'let:A', `$
 assert.deepEqual(keys(groupByProject(pf.roots, projects, { includeEmpty: true })),
   ['gab:B', 'lau:', 'let:A', `${NO_PROJECT}:C,D`]);
 
+// ordem salva pelo usuário (arrastar e soltar); quem não tem posição vai depois, por nome
+assert.deepEqual(keys(groupByProject(pf.roots, projects, { includeEmpty: true, order: ['let', 'lau'] })),
+  ['let:A', 'lau:', 'gab:B', `${NO_PROJECT}:C,D`]);
+assert.deepEqual(keys(groupByProject(pf.roots, projects, { includeEmpty: true, order: ['lau'] })),
+  ['lau:', 'gab:B', 'let:A', `${NO_PROJECT}:C,D`]);
+
 // checkbox: mais de um projeto; árvore inteira acompanha a raiz
 const sel = ['let', NO_PROJECT];
 assert.deepEqual(filterRootsByProject(pf.roots, sel).map(r => r.id), ['A', 'C']);

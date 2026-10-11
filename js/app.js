@@ -3,7 +3,7 @@ import { SUPABASE_URL, SUPABASE_KEY, REFRESH_MINUTES } from './config.js';
 import {
   DEFAULT_FILTERS, todayISO, buildForest, descendants, ancestors, rootsFor,
   isFilterActive, isRowFilterActive, computeVisible, flatten, toggleNode,
-  NO_PROJECT, filterRootsByProject, groupByProject,
+  NO_PROJECT, filterRootsByProject, groupByProject, sortProjects,
 } from './tree.js';
 import { t, getLang, setLang, LANGS, fmtDate, applyStatic, translateError } from './i18n.js';
 
@@ -17,6 +17,7 @@ const state = {
   filters: { main: { ...DEFAULT_FILTERS }, history: { ...DEFAULT_FILTERS } },
   forest: { byId: new Map(), roots: [] },
   projects: [],
+  projectOrder: [],     // ids na ordem escolhida pelo usuário (arrastar e soltar)
   members: [],          // compartilhamentos visíveis (project_members)
   users: [],            // usuários cadastrados (id, email)
   userId: null,
@@ -129,13 +130,15 @@ function canEditNode(node) {
 
 // ---------- dados ----------
 async function loadTasks() {
-  const [{ data, error }, proj, mem] = await Promise.all([
+  const [{ data, error }, proj, mem, ord] = await Promise.all([
     sb.from('tasks').select('*'),
     sb.from('projects').select('*'),
     sb.from('project_members').select('*'),
+    sb.from('project_order').select('project_id, position').order('position'),
   ]);
-  if (error || proj.error || mem.error) return fail(error || proj.error || mem.error);
+  if (error || proj.error || mem.error || ord.error) return fail(error || proj.error || mem.error || ord.error);
   state.projects = proj.data;
+  state.projectOrder = ord.data.map(o => o.project_id);
   state.members = mem.data;
   const wasOpen = new Set(state.forest.roots.filter(r => r.status !== 'done').map(r => r.id));
   state.forest = buildForest(data);
@@ -198,7 +201,7 @@ const projectName = key => key === NO_PROJECT
 // Filtro de projeto: lista de checkboxes (dá para marcar mais de um)
 function renderProjectFilter(f) {
   const box = $('#f-projects');
-  const sorted = [...state.projects].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  const sorted = sortProjects(state.projects, state.projectOrder);
   const opts = [...sorted.map(p => [p.id, p.name, isOwner(p) ? '' : userEmail(p.owner_id)]), [NO_PROJECT, t('proj.none'), '']];
   box.querySelector('.multi-panel').innerHTML = opts.map(([id, name, owner]) => `
     <label class="chk"><input type="checkbox" value="${esc(id)}" ${f.projects.includes(id) ? 'checked' : ''}> ${esc(name)}${owner ? ` <span class="muted small">· ${esc(owner)}</span>` : ''}</label>`).join('')
@@ -271,6 +274,7 @@ function render() {
   const groups = groupByProject(shownRoots, state.projects, {
     selected: f.projects,
     includeEmpty: state.view === 'main' && !rowFilterActive,
+    order: state.projectOrder,
   });
 
   const leavingIds = new Set();
@@ -310,9 +314,10 @@ function projectRowHtml(g, open) {
     : owner ? (shared.length ? `<span class="badge share" title="${esc(shared.map(m => userEmail(m.user_id)).join(', '))}">${t('share.sharedWith', { n: shared.length })}</span>` : '')
     : `<span class="badge share">${esc(t('share.from', { email: userEmail(p.owner_id) }))} · ${t(myRole(p) === 'editor' ? 'share.roleEditor' : 'share.roleViewer')}</span>`;
   return `
-    <tr class="proj-row" data-project="${esc(g.key)}">
+    <tr class="proj-row" data-project="${esc(g.key)}"${p ? ' draggable="true"' : ''}>
       <td colspan="8">
         <div class="proj-head">
+          ${p ? `<span class="drag-handle" title="${t('proj.drag')}" aria-hidden="true">⋮⋮</span>` : ''}
           <button class="toggle" data-action="proj-toggle" aria-expanded="${open}" aria-label="${t('action.toggle')}">${open ? '▾' : '▸'}</button>
           <span class="proj-name">${esc(name)}</span>
           <span class="proj-count">${g.roots.length}</span>
@@ -325,6 +330,19 @@ function projectRowHtml(g, open) {
 }
 
 // ---------- projetos ----------
+// Arrastar e soltar: põe `key` antes/depois de `targetKey` e salva a ordem do usuário
+async function moveProject(key, targetKey, after) {
+  const ids = sortProjects(state.projects, state.projectOrder).map(p => p.id).filter(id => id !== key);
+  const i = targetKey === NO_PROJECT ? ids.length : ids.indexOf(targetKey) + (after ? 1 : 0);
+  ids.splice(i, 0, key);
+  state.projectOrder = ids;
+  render();
+  const { error } = await sb.from('project_order').upsert(
+    ids.map((project_id, position) => ({ user_id: state.userId, project_id, position })),
+    { onConflict: 'user_id,project_id' });
+  if (error) { fail(error); await loadTasks(); }
+}
+
 async function projectForm(project = null) {
   await loadUsers();   // pega usuários criados depois do login
   const others = state.users.filter(u => u.id !== state.userId);
@@ -899,6 +917,46 @@ function bindUi() {
   });
   document.addEventListener('click', e => { if (!projBox.contains(e.target)) projBox.open = false; });
 
+  // arrastar e soltar projetos: durante o arraste só as linhas de projeto aparecem
+  const rowsEl = $('#rows');
+  let dragKey = null;
+  const clearDrop = () => rowsEl.querySelectorAll('.drop-before, .drop-after')
+    .forEach(r => r.classList.remove('drop-before', 'drop-after'));
+  rowsEl.addEventListener('dragstart', e => {
+    const row = e.target.closest?.('tr.proj-row[draggable=true]');
+    if (!row || state.editing) { e.preventDefault(); return; }
+    dragKey = row.dataset.project;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', dragKey);
+    row.classList.add('dragging');
+    setTimeout(() => rowsEl.classList.add('dragging-projects'), 0);   // esconder no mesmo instante cancela o arraste
+  });
+  rowsEl.addEventListener('dragover', e => {
+    if (!dragKey) return;
+    const row = e.target.closest('tr.proj-row');
+    clearDrop();
+    if (!row || row.dataset.project === dragKey) return;
+    e.preventDefault();
+    const r = row.getBoundingClientRect();
+    const after = row.dataset.project !== NO_PROJECT && e.clientY > r.top + r.height / 2;
+    row.classList.add(after ? 'drop-after' : 'drop-before');
+  });
+  rowsEl.addEventListener('drop', e => {
+    const row = rowsEl.querySelector('.drop-before, .drop-after');
+    if (!dragKey || !row) return;
+    e.preventDefault();
+    const key = dragKey;
+    dragKey = null;
+    rowsEl.classList.remove('dragging-projects');
+    moveProject(key, row.dataset.project, row.classList.contains('drop-after'));
+  });
+  rowsEl.addEventListener('dragend', () => {
+    dragKey = null;
+    clearDrop();
+    rowsEl.classList.remove('dragging-projects');
+    rowsEl.querySelectorAll('.dragging').forEach(r => r.classList.remove('dragging'));
+  });
+
   $('#rows').addEventListener('click', async e => {
     const btn = e.target.closest('button[data-action]');
     if (!btn) {
@@ -1005,7 +1063,7 @@ async function onSession(session) {
   clearInterval(refreshTimer);
   // outro usuário: começa do zero (não mistura dados nem avisos)
   state.forest = { byId: new Map(), roots: [] };
-  state.projects = []; state.members = []; state.users = [];
+  state.projects = []; state.projectOrder = []; state.members = []; state.users = [];
   state.filters = { main: { ...DEFAULT_FILTERS }, history: { ...DEFAULT_FILTERS } };
   state.userId = session?.user?.id ?? null;
   if (!session) return;

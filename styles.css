@@ -281,13 +281,18 @@ tr.proj-row .badge { background: rgba(255, 255, 255, .6); color: var(--brand-ink
 tr.proj-row .proj-count { background: var(--brand-teal); color: var(--brand-ink); }
 tr.proj-row:not(:first-child) td { border-top: 6px solid var(--bg); }
 
-/* arrastar e soltar projetos */
-tr.proj-row .drag-handle { cursor: grab; color: var(--brand-ink); opacity: .4; letter-spacing: -3px; padding-right: 3px; user-select: none; }
-tr.proj-row:hover .drag-handle { opacity: .85; }
+/* arrastar projetos */
+tr.proj-row { user-select: none; }
+tr.proj-row .proj-head { cursor: grab; }
+tr.proj-row .proj-head button { cursor: pointer; }
+tr.proj-row .drag-handle {
+  color: var(--brand-ink); opacity: .45; font-size: 16px; line-height: 1; letter-spacing: -3px;
+  padding: 4px 8px 4px 4px; margin: -4px 0 -4px -4px; touch-action: none;
+}
+tr.proj-row:hover .drag-handle { opacity: .9; }
 #rows.dragging-projects tr:not(.proj-row) { display: none; }
-tr.proj-row.dragging td { opacity: .45; }
-tr.proj-row.drop-before td { box-shadow: inset 4px 0 0 var(--brand-teal), inset 0 3px 0 var(--brand-ink); }
-tr.proj-row.drop-after td { box-shadow: inset 4px 0 0 var(--brand-teal), inset 0 -3px 0 var(--brand-ink); }
+tr.proj-row.dragging td { box-shadow: inset 4px 0 0 var(--brand-teal), 0 0 0 2px var(--brand-teal) inset, var(--shadow); }
+body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select: none; }
 .proj-head { display: flex; align-items: center; gap: 6px; }
 .proj-name { font-weight: 600; }
 .proj-count {

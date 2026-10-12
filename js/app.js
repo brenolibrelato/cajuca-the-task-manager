@@ -3,7 +3,7 @@ import { SUPABASE_URL, SUPABASE_KEY, REFRESH_MINUTES } from './config.js';
 import {
   DEFAULT_FILTERS, todayISO, buildForest, descendants, ancestors, rootsFor,
   isFilterActive, isRowFilterActive, computeVisible, flatten, toggleNode,
-  NO_PROJECT, filterRootsByProject, groupByProject, sortProjects,
+  NO_PROJECT, filterRootsByProject, groupByProject, orderedKeys,
 } from './tree.js';
 import { t, getLang, setLang, LANGS, fmtDate, applyStatic, translateError } from './i18n.js';
 
@@ -138,7 +138,7 @@ async function loadTasks() {
   ]);
   if (error || proj.error || mem.error || ord.error) return fail(error || proj.error || mem.error || ord.error);
   state.projects = proj.data;
-  state.projectOrder = ord.data.map(o => o.project_id);
+  state.projectOrder = ord.data.map(o => o.project_id ?? NO_PROJECT);   // nulo = "Sem projeto"
   state.members = mem.data;
   const wasOpen = new Set(state.forest.roots.filter(r => r.status !== 'done').map(r => r.id));
   state.forest = buildForest(data);
@@ -201,8 +201,10 @@ const projectName = key => key === NO_PROJECT
 // Filtro de projeto: lista de checkboxes (dá para marcar mais de um)
 function renderProjectFilter(f) {
   const box = $('#f-projects');
-  const sorted = sortProjects(state.projects, state.projectOrder);
-  const opts = [...sorted.map(p => [p.id, p.name, isOwner(p) ? '' : userEmail(p.owner_id)]), [NO_PROJECT, t('proj.none'), '']];
+  const byId = new Map(state.projects.map(p => [p.id, p]));
+  const opts = orderedKeys(state.projects, state.projectOrder).map(k => k === NO_PROJECT
+    ? [NO_PROJECT, t('proj.none'), '']
+    : [k, byId.get(k).name, isOwner(byId.get(k)) ? '' : userEmail(byId.get(k).owner_id)]);
   box.querySelector('.multi-panel').innerHTML = opts.map(([id, name, owner]) => `
     <label class="chk"><input type="checkbox" value="${esc(id)}" ${f.projects.includes(id) ? 'checked' : ''}> ${esc(name)}${owner ? ` <span class="muted small">· ${esc(owner)}</span>` : ''}</label>`).join('')
     + (f.projects.length ? `<button type="button" class="ghost" data-clear-projects>${t('filter.allProjects')}</button>` : '');
@@ -314,10 +316,10 @@ function projectRowHtml(g, open) {
     : owner ? (shared.length ? `<span class="badge share" title="${esc(shared.map(m => userEmail(m.user_id)).join(', '))}">${t('share.sharedWith', { n: shared.length })}</span>` : '')
     : `<span class="badge share">${esc(t('share.from', { email: userEmail(p.owner_id) }))} · ${t(myRole(p) === 'editor' ? 'share.roleEditor' : 'share.roleViewer')}</span>`;
   return `
-    <tr class="proj-row" data-project="${esc(g.key)}"${p ? ' draggable="true"' : ''}>
+    <tr class="proj-row" data-project="${esc(g.key)}">
       <td colspan="8">
         <div class="proj-head">
-          ${p ? `<span class="drag-handle" title="${t('proj.drag')}" aria-hidden="true">⋮⋮</span>` : ''}
+          <span class="drag-handle" title="${t('proj.drag')}" aria-hidden="true">⋮⋮</span>
           <button class="toggle" data-action="proj-toggle" aria-expanded="${open}" aria-label="${t('action.toggle')}">${open ? '▾' : '▸'}</button>
           <span class="proj-name">${esc(name)}</span>
           <span class="proj-count">${g.roots.length}</span>
@@ -330,16 +332,86 @@ function projectRowHtml(g, open) {
 }
 
 // ---------- projetos ----------
-// Arrastar e soltar: põe `key` antes/depois de `targetKey` e salva a ordem do usuário
-async function moveProject(key, targetKey, after) {
-  const ids = sortProjects(state.projects, state.projectOrder).map(p => p.id).filter(id => id !== key);
-  const i = targetKey === NO_PROJECT ? ids.length : ids.indexOf(targetKey) + (after ? 1 : 0);
-  ids.splice(i, 0, key);
+// ---------- arrastar projetos ----------
+// Pointer events (mouse, caneta e toque) em vez do arrastar nativo do HTML, que
+// falha com linhas de tabela em alguns navegadores. Durante o arraste só as
+// linhas de projeto ficam visíveis e a linha arrastada muda de lugar ao vivo.
+function bindProjectDrag() {
+  const rowsEl = $('#rows');
+  let drag = null;   // { row, startY, active }
+
+  const projRows = () => [...rowsEl.querySelectorAll('tr.proj-row')];
+
+  rowsEl.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || state.editing || drag) return;
+    const row = e.target.closest('tr.proj-row');
+    if (!row || e.target.closest('button, input, select, a')) return;
+    drag = { row, startY: e.clientY, active: false };
+    if (e.target.closest('.drag-handle')) e.preventDefault();   // não seleciona texto nem rola (toque)
+  });
+
+  function start() {
+    drag.active = true;
+    state.editing = true;   // pausa a atualização automática enquanto arrasta
+    const before = drag.row.getBoundingClientRect().top;
+    rowsEl.classList.add('dragging-projects');
+    drag.row.classList.add('dragging');
+    document.body.classList.add('is-dragging');
+    // as tarefas somem e a linha sobe: rola para ela continuar sob o ponteiro;
+    // o que não der para rolar vira um deslocamento aplicado ao ponteiro
+    window.scrollBy(0, drag.row.getBoundingClientRect().top - before);
+    drag.shift = drag.row.getBoundingClientRect().top - before;
+  }
+
+  function finish(save) {
+    const d = drag;
+    drag = null;
+    if (!d?.active) return;
+    document.body.classList.remove('is-dragging');
+    rowsEl.classList.remove('dragging-projects');
+    d.row.classList.remove('dragging');
+    state.editing = false;
+    if (save) saveProjectOrder(projRows().map(r => r.dataset.project));
+    else render();
+  }
+
+  window.addEventListener('pointermove', e => {
+    if (!drag) return;
+    if (!drag.active) {
+      if (Math.abs(e.clientY - drag.startY) < 5) return;   // ainda é um clique
+      start();
+    }
+    e.preventDefault();
+    // a linha vai antes da primeira linha cujo meio está abaixo do ponteiro
+    const y = e.clientY + drag.shift;
+    const others = projRows().filter(r => r !== drag.row);
+    const next = others.find(r => { const b = r.getBoundingClientRect(); return y < b.top + b.height / 2; });
+    if (next) {
+      if (next.previousElementSibling !== drag.row) rowsEl.insertBefore(drag.row, next);
+    } else {
+      const last = others[others.length - 1];
+      if (last && !(last.compareDocumentPosition(drag.row) & Node.DOCUMENT_POSITION_FOLLOWING)) rowsEl.append(drag.row);
+    }
+    // rola a página perto das bordas
+    if (e.clientY < 60) window.scrollBy(0, -12);
+    else if (e.clientY > window.innerHeight - 60) window.scrollBy(0, 12);
+  }, { passive: false });
+
+  window.addEventListener('pointerup', () => finish(true));
+  window.addEventListener('pointercancel', () => finish(false));
+  window.addEventListener('keydown', e => { if (e.key === 'Escape' && drag?.active) finish(false); });
+}
+
+// Salva a ordem da tela. Projetos escondidos pelo filtro mantêm o lugar deles.
+async function saveProjectOrder(visibleKeys) {
+  const shown = new Set(visibleKeys);
+  let i = 0;
+  const ids = orderedKeys(state.projects, state.projectOrder).map(k => shown.has(k) ? visibleKeys[i++] : k);
+  const changed = ids.join() !== orderedKeys(state.projects, state.projectOrder).join();
   state.projectOrder = ids;
   render();
-  const { error } = await sb.from('project_order').upsert(
-    ids.map((project_id, position) => ({ user_id: state.userId, project_id, position })),
-    { onConflict: 'user_id,project_id' });
+  if (!changed) return;
+  const { error } = await sb.rpc('save_project_order', { p_ids: ids.map(id => id === NO_PROJECT ? null : id) });
   if (error) { fail(error); await loadTasks(); }
 }
 
@@ -917,45 +989,7 @@ function bindUi() {
   });
   document.addEventListener('click', e => { if (!projBox.contains(e.target)) projBox.open = false; });
 
-  // arrastar e soltar projetos: durante o arraste só as linhas de projeto aparecem
-  const rowsEl = $('#rows');
-  let dragKey = null;
-  const clearDrop = () => rowsEl.querySelectorAll('.drop-before, .drop-after')
-    .forEach(r => r.classList.remove('drop-before', 'drop-after'));
-  rowsEl.addEventListener('dragstart', e => {
-    const row = e.target.closest?.('tr.proj-row[draggable=true]');
-    if (!row || state.editing) { e.preventDefault(); return; }
-    dragKey = row.dataset.project;
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', dragKey);
-    row.classList.add('dragging');
-    setTimeout(() => rowsEl.classList.add('dragging-projects'), 0);   // esconder no mesmo instante cancela o arraste
-  });
-  rowsEl.addEventListener('dragover', e => {
-    if (!dragKey) return;
-    const row = e.target.closest('tr.proj-row');
-    clearDrop();
-    if (!row || row.dataset.project === dragKey) return;
-    e.preventDefault();
-    const r = row.getBoundingClientRect();
-    const after = row.dataset.project !== NO_PROJECT && e.clientY > r.top + r.height / 2;
-    row.classList.add(after ? 'drop-after' : 'drop-before');
-  });
-  rowsEl.addEventListener('drop', e => {
-    const row = rowsEl.querySelector('.drop-before, .drop-after');
-    if (!dragKey || !row) return;
-    e.preventDefault();
-    const key = dragKey;
-    dragKey = null;
-    rowsEl.classList.remove('dragging-projects');
-    moveProject(key, row.dataset.project, row.classList.contains('drop-after'));
-  });
-  rowsEl.addEventListener('dragend', () => {
-    dragKey = null;
-    clearDrop();
-    rowsEl.classList.remove('dragging-projects');
-    rowsEl.querySelectorAll('.dragging').forEach(r => r.classList.remove('dragging'));
-  });
+  bindProjectDrag();
 
   $('#rows').addEventListener('click', async e => {
     const btn = e.target.closest('button[data-action]');

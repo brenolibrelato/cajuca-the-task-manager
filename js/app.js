@@ -338,41 +338,85 @@ function projectRowHtml(g, open) {
 // linhas de projeto ficam visíveis e a linha arrastada muda de lugar ao vivo.
 function bindProjectDrag() {
   const rowsEl = $('#rows');
-  let drag = null;   // { row, startY, active }
+  let drag = null;   // { row, startY, active, ready, shift }
 
   const projRows = () => [...rowsEl.querySelectorAll('tr.proj-row')];
+  const calm = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const EASE = 'cubic-bezier(.2, .8, .2, 1)';
+  const inView = el => { const b = el.getBoundingClientRect(); return b.bottom > 0 && b.top < window.innerHeight; };
+
+  // posição atual (visual) de cada linha de projeto
+  const tops = () => new Map(projRows().map(r => [r.dataset.project, r.getBoundingClientRect().top]));
+
+  // FLIP: desliza cada linha de projeto da posição antiga até a nova
+  function slide(first, duration = 220, skip = null) {
+    if (calm()) return;
+    projRows().forEach(r => {
+      if (r === skip) return;
+      const f = first.get(r.dataset.project);
+      if (f == null) return;
+      r.getAnimations().forEach(a => a.cancel());
+      const dy = f - r.getBoundingClientRect().top;
+      if (Math.abs(dy) > 1) r.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration, easing: EASE });
+    });
+  }
+
+  // meio da linha pela posição de layout (ignora animações em andamento, evita tremer)
+  const midY = r => rowsEl.getBoundingClientRect().top + (r.offsetTop - rowsEl.offsetTop) + r.offsetHeight / 2;
 
   rowsEl.addEventListener('pointerdown', e => {
     if (e.button !== 0 || state.editing || drag) return;
     const row = e.target.closest('tr.proj-row');
     if (!row || e.target.closest('button, input, select, a')) return;
-    drag = { row, startY: e.clientY, active: false };
+    drag = { row, startY: e.clientY, active: false, ready: false, shift: 0 };
     if (e.target.closest('.drag-handle')) e.preventDefault();   // não seleciona texto nem rola (toque)
   });
 
-  function start() {
-    drag.active = true;
+  // 1) as tarefas visíveis recolhem para dentro do projeto; 2) os projetos deslizam juntos
+  async function start() {
+    const d = drag;
+    d.active = true;
     state.editing = true;   // pausa a atualização automática enquanto arrasta
-    const before = drag.row.getBoundingClientRect().top;
-    rowsEl.classList.add('dragging-projects');
-    drag.row.classList.add('dragging');
     document.body.classList.add('is-dragging');
-    // as tarefas somem e a linha sobe: rola para ela continuar sob o ponteiro;
-    // o que não der para rolar vira um deslocamento aplicado ao ponteiro
-    window.scrollBy(0, drag.row.getBoundingClientRect().top - before);
-    drag.shift = drag.row.getBoundingClientRect().top - before;
+    d.row.classList.add('dragging');
+    const first = tops();
+    const before = d.row.getBoundingClientRect().top;
+
+    const tasks = [...rowsEl.querySelectorAll('tr:not(.proj-row)')].filter(inView);
+    let fades = [];
+    if (!calm() && tasks.length) {
+      fades = tasks.map(tr => tr.animate(
+        [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(-10px) scaleY(.85)' }],
+        { duration: 150, easing: 'ease-in', fill: 'forwards' }));
+      await Promise.all(fades.map(a => a.finished.catch(() => {})));
+    }
+    if (drag !== d) { fades.forEach(a => a.cancel()); return; }   // soltou antes de terminar
+
+    rowsEl.classList.add('dragging-projects');
+    fades.forEach(a => a.cancel());
+    // a linha subiu: rola para ela continuar sob o ponteiro; o que não der vira deslocamento
+    window.scrollBy(0, d.row.getBoundingClientRect().top - before);
+    d.shift = d.row.getBoundingClientRect().top - before;
+    slide(first);
+    d.ready = true;
   }
 
+  // ao soltar: projetos deslizam para o lugar e as tarefas reaparecem
   function finish(save) {
     const d = drag;
     drag = null;
     if (!d?.active) return;
+    const first = tops();
     document.body.classList.remove('is-dragging');
     rowsEl.classList.remove('dragging-projects');
-    d.row.classList.remove('dragging');
     state.editing = false;
-    if (save) saveProjectOrder(projRows().map(r => r.dataset.project));
+    if (save && d.ready) saveProjectOrder(projRows().map(r => r.dataset.project));   // já renderiza
     else render();
+    if (calm()) return;
+    slide(first, 260);
+    [...rowsEl.querySelectorAll('tr:not(.proj-row)')].filter(inView).forEach(tr => tr.animate(
+      [{ opacity: 0, transform: 'translateY(-10px) scaleY(.85)' }, { opacity: 1, transform: 'none' }],
+      { duration: 220, delay: 120, easing: 'ease-out', fill: 'backwards' }));
   }
 
   window.addEventListener('pointermove', e => {
@@ -380,17 +424,21 @@ function bindProjectDrag() {
     if (!drag.active) {
       if (Math.abs(e.clientY - drag.startY) < 5) return;   // ainda é um clique
       start();
+      return;
     }
     e.preventDefault();
-    // a linha vai antes da primeira linha cujo meio está abaixo do ponteiro
+    if (!drag.ready) return;   // esperando as tarefas recolherem
+
+    // posição desejada = quantos projetos têm o meio acima do ponteiro
     const y = e.clientY + drag.shift;
-    const others = projRows().filter(r => r !== drag.row);
-    const next = others.find(r => { const b = r.getBoundingClientRect(); return y < b.top + b.height / 2; });
-    if (next) {
-      if (next.previousElementSibling !== drag.row) rowsEl.insertBefore(drag.row, next);
-    } else {
-      const last = others[others.length - 1];
-      if (last && !(last.compareDocumentPosition(drag.row) & Node.DOCUMENT_POSITION_FOLLOWING)) rowsEl.append(drag.row);
+    const rows = projRows();
+    const others = rows.filter(r => r !== drag.row);
+    const idx = others.filter(r => midY(r) < y).length;
+    if (idx !== rows.indexOf(drag.row)) {
+      const first = tops();
+      if (idx < others.length) rowsEl.insertBefore(drag.row, others[idx]);
+      else others[others.length - 1].after(drag.row);
+      slide(first, 160, drag.row);   // os vizinhos abrem espaço deslizando
     }
     // rola a página perto das bordas
     if (e.clientY < 60) window.scrollBy(0, -12);

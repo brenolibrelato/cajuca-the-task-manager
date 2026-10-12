@@ -349,7 +349,7 @@ function bindProjectDrag() {
   const tops = () => new Map(projRows().map(r => [r.dataset.project, r.getBoundingClientRect().top]));
 
   // FLIP: desliza cada linha de projeto da posição antiga até a nova
-  function slide(first, duration = 220, skip = null) {
+  function slide(first, duration = 660, skip = null) {
     if (calm()) return;
     projRows().forEach(r => {
       if (r === skip) return;
@@ -390,7 +390,7 @@ function bindProjectDrag() {
     if (!calm() && tasks.length) {
       fades = tasks.map(tr => tr.animate(
         [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(-10px) scaleY(.85)' }],
-        { duration: 150, easing: 'ease-in', fill: 'forwards' }));
+        { duration: 450, easing: 'ease-in', fill: 'forwards' }));
       await Promise.all(fades.map(a => a.finished.catch(() => {})));
     }
     if (drag !== d) { fades.forEach(a => a.cancel()); return; }   // soltou antes de terminar
@@ -416,10 +416,10 @@ function bindProjectDrag() {
     if (save && d.ready) saveProjectOrder(projRows().map(r => r.dataset.project));   // já renderiza
     else render();
     if (calm()) return;
-    slide(first, 260);
+    slide(first, 780);
     [...rowsEl.querySelectorAll('tr:not(.proj-row)')].filter(inView).forEach(tr => tr.animate(
       [{ opacity: 0, transform: 'translateY(-10px) scaleY(.85)' }, { opacity: 1, transform: 'none' }],
-      { duration: 220, delay: 120, easing: 'ease-out', fill: 'backwards' }));
+      { duration: 660, delay: 360, easing: 'ease-out', fill: 'backwards' }));
   }
 
   window.addEventListener('pointermove', e => {
@@ -441,7 +441,7 @@ function bindProjectDrag() {
       const first = tops();
       if (idx < others.length) rowsEl.insertBefore(drag.row, others[idx]);
       else others[others.length - 1].after(drag.row);
-      slide(first, 160, drag.row);   // os vizinhos abrem espaço deslizando
+      slide(first, 480, drag.row);   // os vizinhos abrem espaço deslizando
     }
     // rola a página perto das bordas
     if (e.clientY < 60) window.scrollBy(0, -12);

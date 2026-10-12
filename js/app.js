@@ -369,7 +369,10 @@ function bindProjectDrag() {
     const row = e.target.closest('tr.proj-row');
     if (!row || e.target.closest('button, input, select, a')) return;
     drag = { row, startY: e.clientY, active: false, ready: false, shift: 0 };
-    if (e.target.closest('.drag-handle')) e.preventDefault();   // não seleciona texto nem rola (toque)
+    if (e.target.closest('.drag-handle')) {
+      e.preventDefault();   // não seleciona texto nem rola (toque)
+      start();              // pela alça, recolhe já no clique (pelo resto da linha, só ao mover)
+    }
   });
 
   // 1) as tarefas visíveis recolhem para dentro do projeto; 2) os projetos deslizam juntos

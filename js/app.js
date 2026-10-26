@@ -156,7 +156,8 @@ async function runAutomations() {
     const { data, error } = await sb.rpc('refresh_automations');
     if (error) return fail(error);
     await loadTasks();
-    for (const p of data.overdue) await overduePopup(p);
+    const snoozed = snoozedToday();
+    for (const p of data.overdue) if (!snoozed.has(p.event_id)) await overduePopup(p);
     for (const p of data.inactivity) await inactivityPopup(p.task_id);
     for (const p of data.reminders) await reminderPopup(p);
   } finally {
@@ -164,10 +165,32 @@ async function runAutomations() {
   }
 }
 
-// Depois de qualquer alteração: recarrega e verifica se algo entrou em atraso
+// Depois de qualquer alteração: só recarrega a lista. Os pop-ups ficam para
+// a verificação periódica (REFRESH_MINUTES), para não interromper quem está trabalhando.
 async function afterChange() {
-  if (state.busy) return loadTasks();
-  return runAutomations();
+  return loadTasks();
+}
+
+// "Lembrar amanhã" no pop-up de atraso. Fica salvo só neste navegador, por usuário:
+// { [event_id]: 'AAAA-MM-DD' } = não mostrar esse atraso de novo nesse dia.
+const snoozeKey = () => `cajuca.snooze.${state.userId}`;
+
+function snoozedToday() {
+  const today = todayISO();
+  try {
+    const all = JSON.parse(localStorage.getItem(snoozeKey()) || '{}');
+    const kept = Object.fromEntries(Object.entries(all).filter(([, day]) => day === today));
+    localStorage.setItem(snoozeKey(), JSON.stringify(kept));   // descarta adiamentos de dias anteriores
+    return new Set(Object.keys(kept));
+  } catch { return new Set(); }
+}
+
+function snoozeOverdue(eventId) {
+  try {
+    const all = JSON.parse(localStorage.getItem(snoozeKey()) || '{}');
+    all[eventId] = todayISO();
+    localStorage.setItem(snoozeKey(), JSON.stringify(all));
+  } catch { /* navegador sem armazenamento: o aviso volta na próxima verificação */ }
 }
 
 // ---------- renderização ----------
@@ -883,8 +906,14 @@ async function overduePopup(p) {
       </div>
       <p class="muted">${t('overdue.planHint')}</p>
       <div class="m-actions"><button class="primary">${t('overdue.planSubmit')}</button></div>
-    </form>`, { mandatory: true });
+    </form>
+    <div class="m-actions"><button type="button" data-snooze>${t('overdue.snooze')}</button></div>`, { mandatory: true });
   bindAssigneeField(dlg);
+
+  dlg.querySelector('[data-snooze]').addEventListener('click', () => {
+    snoozeOverdue(p.event_id);
+    dlg.close();
+  });
 
   dlg.querySelectorAll('[data-mode]').forEach(btn => btn.addEventListener('click', () => {
     dlg.querySelectorAll('[data-mode]').forEach(b => b.classList.toggle('selected', b === btn));

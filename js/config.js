@@ -4,4 +4,4 @@ export const SUPABASE_URL = 'https://dtojmatylupzfhuyyltj.supabase.co';
 export const SUPABASE_KEY = 'sb_publishable_nntqnnHR9KjONUjWwNGKOg_uXQuTJyF';
 
 // De quanto em quanto tempo a tela reavalia atrasos/lembretes/inatividade
-export const REFRESH_MINUTES = 5;
+export const REFRESH_MINUTES = 30;

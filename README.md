@@ -13,7 +13,7 @@ O Cajuca é um gestor de tarefas hierárquico: cada tarefa pode ter subtarefas i
 - **Ordem dos projetos** definida arrastando e soltando, salva para cada usuário
 - **Compartilhamento de projetos** com outros usuários, escolhendo para cada um "só visualização" ou "visualização e edição". Tarefas fora de projeto são privadas
 - **Status automático**: a tarefa mãe fica "em andamento" quando alguma filha começa e é concluída quando todas as filhas terminam
-- **Controle de atraso**: tarefas com prazo vencido ficam atrasadas, e um aviso permite prorrogar o prazo ou criar um plano de ação
+- **Controle de atraso**: tarefas com prazo vencido ficam atrasadas, e um aviso permite prorrogar o prazo, criar um plano de ação ou lembrar no dia seguinte
 - **Situação da tarefa**: em andamento, aguardando terceiros, parado ou outros (com justificativa). Uma tarefa parada pausa a árvore inteira
 - **Aviso de inatividade** a cada 7 dias para tarefas em andamento sem movimentação
 - **Lembretes** configuráveis em dias antes do prazo

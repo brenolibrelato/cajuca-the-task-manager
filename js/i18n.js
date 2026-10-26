@@ -151,6 +151,7 @@ const DICT = {
     'overdue.planTask': 'Subtarefa do plano de ação',
     'overdue.planHint': 'A tarefa continua "Atrasado" até as subtarefas do plano serem concluídas.',
     'overdue.planSubmit': 'Criar plano',
+    'overdue.snooze': 'Lembrar amanhã',
 
     'inact.title': 'Tarefa sem atividade há mais de 7 dias',
     'inact.header': '<strong>{title}</strong> · Prazo: {due}',
@@ -334,6 +335,7 @@ const DICT = {
     'overdue.planTask': 'Action plan subtask',
     'overdue.planHint': 'The task stays "Overdue" until the action plan subtasks are done.',
     'overdue.planSubmit': 'Create plan',
+    'overdue.snooze': 'Remind me tomorrow',
 
     'inact.title': 'Task inactive for more than 7 days',
     'inact.header': '<strong>{title}</strong> · Due: {due}',

@@ -24,7 +24,8 @@ function compareTasks(a, b) {
     if (!b.due_date) return -1;
     return a.due_date < b.due_date ? -1 : 1;
   }
-  return (a.created_at || '') < (b.created_at || '') ? -1 : 1;
+  const ca = a.created_at || '', cb = b.created_at || '';
+  return ca < cb ? -1 : ca > cb ? 1 : 0;
 }
 
 export function buildForest(tasks) {
@@ -150,8 +151,8 @@ export function matches(node, f, view, today) {
   const who = node.assignees || [];
   if (f.assignee === '__none__') {
     if (who.length) return false;
-  } else if (f.assignee && !who.includes(f.assignee)) {
-    return false;
+  } else if (f.assignee && !who.some(w => w.toLowerCase() === f.assignee.toLowerCase())) {
+    return false;   // o banco trata "Ana" e "ana" como a mesma pessoa
   }
 
   if (f.period !== 'all') {

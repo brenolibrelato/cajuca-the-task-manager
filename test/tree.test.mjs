@@ -57,6 +57,7 @@ assert.deepEqual(ids(view('main', fAnd)), ['P', 'P.1']);
 
 // vários responsáveis: qualquer um deles bate; "sem responsável" pega lista vazia
 assert.deepEqual(ids(view('main', { ...DEFAULT_FILTERS, assignee: 'Carlos' })), ['P', 'P.1']);
+assert.deepEqual(ids(view('main', { ...DEFAULT_FILTERS, assignee: 'carlos' })), ['P', 'P.1']);   // sem diferenciar maiúsculas
 assert.equal(matches(forest.byId.get('P.1'), { ...DEFAULT_FILTERS, assignee: '__none__' }, 'main', today), false);
 assert.equal(matches(forest.byId.get('P.1.a'), { ...DEFAULT_FILTERS, assignee: '__none__' }, 'main', today), true);
 

@@ -1,0 +1,10 @@
+{
+  "name": "cajuca-the-task-manager",
+  "private": true,
+  "type": "module",
+  "description": "Cajuca — planejador de tarefas hierárquico (front estático + Supabase)",
+  "scripts": {
+    "test": "node test/tree.test.mjs && node test/i18n.test.mjs"
+  },
+  "engines": { "node": ">=18" }
+}

@@ -212,8 +212,8 @@ table.tasks {
   border-radius: 12px;
   overflow: hidden;
 }
-.w-title { width: 30%; } .w-notes { width: 16%; } .w-prio { width: 96px; } .w-due { width: 104px; }
-.w-rem { width: 88px; } .w-who { width: 15%; } .w-status { width: 160px; } .w-act { width: 200px; }
+.w-title { width: 30%; } .w-notes { width: 15%; } .w-prio { width: 96px; } .w-due { width: 140px; }
+.w-rem { width: 88px; } .w-who { width: 14%; } .w-status { width: 160px; } .w-act { width: 156px; }
 
 th {
   text-align: left;
@@ -235,7 +235,7 @@ td {
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover td { background: var(--row-hover); }
 
-.title-wrap { display: flex; align-items: flex-start; gap: 4px; }
+.title-wrap { display: flex; align-items: flex-start; gap: 4px; padding-left: calc(var(--depth, 0) * 22px); }
 .title-text { min-width: 0; overflow-wrap: anywhere; }
 .title-text strong { font-weight: 500; }
 .toggle {
@@ -268,6 +268,7 @@ tr.paused td { opacity: .45; }                              /* "Parado" e descen
 tr.paused td.actions { opacity: 1; }
 
 .actions { text-align: right; white-space: nowrap; }
+.resume { padding-right: 8px; }
 
 /* faixa do projeto */
 /* faixa do projeto: verde-água claro com borda na cor da marca; texto no preto da marca (legível nos dois temas) */
@@ -420,3 +421,254 @@ td.editing { padding: 3px 6px; overflow: visible; }
 .title-text.editing { flex: 1; }
 .cell-edit { padding: 4px 6px; font-size: 14px; border-color: var(--accent); }
 textarea.cell-edit { min-height: 54px; resize: vertical; }
+
+/* ---------- utilidades ---------- */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.print-only { display: none; }
+.pre { white-space: pre-line; }
+.warn { color: var(--late-text); font-size: 13px; margin: 0; grid-column: 1 / -1; }
+.warn:empty { display: none; }
+button.danger-btn { background: var(--late-text); border-color: var(--late-text); color: var(--surface); font-weight: 600; }
+button.danger-btn:hover { filter: brightness(.92); border-color: var(--late-text); }
+button.icon svg.dots, .menu svg.dots { fill: currentColor; stroke: none; }
+.badge svg { width: 8px; height: 8px; fill: currentColor; stroke: none; margin-right: 4px; }
+
+/* ---------- login: mostrar/ocultar senha ---------- */
+.pw-wrap { position: relative; display: block; }
+.pw-wrap input { padding-right: 42px; }
+.pw-toggle { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); }
+.pw-toggle[aria-pressed="true"] { color: var(--accent-ink); }
+
+/* ---------- carregando ---------- */
+.loading { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); padding: 40px 0; margin: 0; }
+.spinner {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- sino de pendências ---------- */
+.bell { position: relative; }
+.bell svg { width: 20px !important; height: 20px !important; }
+.bell.has-pending { color: var(--text); }
+.bell-count {
+  position: absolute; top: -3px; right: -5px;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  background: var(--late-text); color: var(--surface);
+  font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
+}
+
+/* ---------- resumo e atalhos ---------- */
+.summary { display: grid; grid-template-columns: repeat(4, minmax(0, 190px)); gap: 10px; padding: 14px 16px 0; }
+.sum-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  text-align: left; padding: 10px 14px; border-radius: 12px;
+}
+.sum-n { font-size: 22px; font-weight: 700; line-height: 1.1; }
+.sum-l { font-size: 12px; color: var(--muted); }
+.sum-overdue .sum-n { color: var(--late-text); }
+.sum-in_progress .sum-n { color: var(--prog-text); }
+.sum-card[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 12px; }
+.chip { border-radius: 999px; padding: 4px 12px; font-size: 13px; }
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+
+/* barra de filtros: no computador os campos ficam soltos na barra; no celular, recolhidos */
+.filters { display: contents; }
+.filters-toggle { display: none; align-items: center; gap: 6px; }
+.filters-toggle .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); display: inline-block; }
+.tool-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+.search input { min-width: 180px; }
+
+/* ---------- cabeçalho ordenável ---------- */
+th button.sort {
+  border: 0; background: transparent; padding: 0; border-radius: 4px;
+  font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit;
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+}
+th button.sort:hover { color: var(--text); }
+.sort-ind { font-size: 10px; opacity: .45; }
+th[aria-sort] .sort-ind { opacity: 1; color: var(--accent-ink); }
+
+/* prazo relativo ("em 3 dias") embaixo da data */
+.rel { display: block; font-size: 11px; color: var(--muted); }
+tr.st-overdue .rel { color: var(--late-text); }
+
+/* ---------- menu "⋯" ---------- */
+.menu {
+  position: fixed; z-index: 30; min-width: 200px; max-width: calc(100vw - 16px);
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow);
+  padding: 6px; display: grid; gap: 2px;
+}
+.menu [role="menuitem"] {
+  border: 0; background: transparent; width: 100%;
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; text-align: left;
+}
+.menu [role="menuitem"]:hover, .menu [role="menuitem"]:focus { background: var(--badge-bg); }
+.menu svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.menu .danger { color: var(--late-text); }
+
+/* setas de ordem do projeto: aparecem ao passar o mouse ou ao receber foco pelo teclado */
+.proj-move { display: inline-flex; opacity: 0; transition: opacity .15s; }
+tr.proj-row:hover .proj-move, .proj-move:focus-within { opacity: 1; }
+@media (hover: none) { .proj-move { opacity: 1; } }
+
+/* ---------- arrastar tarefas ---------- */
+.task-handle {
+  flex: none; color: var(--muted); opacity: .3; cursor: grab; user-select: none;
+  touch-action: none;   /* no toque, arrastar pela alça não rola a página */
+  font-size: 14px; line-height: 1.45; letter-spacing: -3px; padding: 0 6px 0 0; margin-left: -4px;
+}
+tr:hover .task-handle { opacity: .9; }
+@media (hover: none) { .task-handle { opacity: .6; } }
+#rows tr.drop-ok td { box-shadow: inset 0 0 0 2px var(--accent); }
+#rows tr.drop-bad td { box-shadow: inset 0 0 0 2px var(--late-text); }
+#rows tr.drag-source td { opacity: .45; }
+.drag-ghost {
+  position: fixed; left: 0; top: 0; z-index: 40; pointer-events: none;
+  background: var(--surface); color: var(--text); border: 1px solid var(--accent); border-radius: 8px;
+  padding: 6px 10px; box-shadow: var(--shadow); font-size: 13px;
+  max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+body.is-dragging-task, body.is-dragging-task * { cursor: grabbing !important; user-select: none; }
+
+/* ---------- painel de pendências (gaveta à direita) ---------- */
+dialog.drawer {
+  margin: 0 0 0 auto; height: 100%; max-height: 100%; width: min(440px, 100vw); max-width: 100vw;
+  border-radius: 0; border-width: 0 0 0 1px;
+}
+dialog.drawer[open] { display: flex; flex-direction: column; animation: drawer-in .22s ease-out; }
+@keyframes drawer-in { from { transform: translateX(24px); opacity: 0; } }
+.drawer-body { padding: 14px 20px 20px; overflow: auto; flex: 1; display: grid; align-content: start; gap: 12px; }
+.drawer-body p { margin: 0; }
+.pending-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.pending-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  border: 1px solid var(--border); border-left: 4px solid var(--muted); border-radius: 10px; padding: 10px 12px;
+}
+.pending-item.kind-overdue { border-left-color: var(--late-text); }
+.pending-item.kind-inactivity { border-left-color: var(--prog-text); }
+.pending-item.kind-reminder { border-left-color: var(--accent); }
+.pending-item.snoozed { opacity: .7; }
+.pending-item button { flex: none; }
+.pi-text { display: grid; gap: 2px; min-width: 0; }
+.pi-text strong { font-weight: 600; overflow-wrap: anywhere; }
+.pi-kind { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; }
+  dialog.drawer[open] { animation: none; }
+  .proj-move { transition: none; }
+}
+
+/* ---------- celular (até 720px): a tabela vira lista de cartões ---------- */
+@media (max-width: 720px) {
+  body { overflow-x: hidden; }
+  .topbar { gap: 8px 12px; padding: 8px 12px; }
+  .user { gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  #user-email { display: none; }
+  .tab { min-height: 44px; }
+
+  .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 12px 12px 0; gap: 8px; }
+  .chips { padding: 0 12px 10px; }
+  .chip { min-height: 44px; }
+
+  .toolbar { padding: 10px 12px; gap: 8px; align-items: center; }
+  .filters-toggle { display: inline-flex; min-height: 44px; }
+  .filters { display: none; }
+  .toolbar.open .filters { display: grid; grid-template-columns: 1fr; gap: 10px; width: 100%; }
+  .toolbar label, .field { min-width: 0; }
+  .search input { min-width: 0; }
+  details.multi summary { max-width: none; min-height: 44px; display: flex; align-items: center; }
+  .toolbar .spacer { display: none; }
+  .tool-actions { width: 100%; }
+  .tool-actions button { min-height: 44px; flex: 1 1 auto; }
+
+  input:not([type="checkbox"]):not([type="radio"]), select { min-height: 44px; }
+  button.icon { min-width: 44px; min-height: 44px; justify-content: center; }
+  .toggle, .toggle-spacer { width: 44px; min-height: 44px; }
+  .task-handle { min-height: 44px; display: inline-flex; align-items: center; padding: 0 8px; margin-left: 0; }
+
+  .table-wrap { padding: 0 12px 24px; overflow-x: visible; }
+  table.tasks, table.tasks thead, table.tasks tbody { display: block; }
+  table.tasks { min-width: 0; border: 0; border-radius: 0; background: transparent; overflow: visible; }
+  table.tasks colgroup { display: none; }
+
+  /* cabeçalho vira uma fileira de botões de ordenação */
+  table.tasks thead tr { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 6px; }
+  table.tasks th { border: 0; padding: 0; }
+  th.c-notes, th.c-reminder_days, th.c-assignees, th.c-actions { display: none; }
+  th button.sort {
+    min-height: 44px; padding: 0 12px; border: 1px solid var(--border); border-radius: 999px;
+    background: var(--surface); text-transform: none; letter-spacing: 0; font-size: 13px;
+  }
+
+  #rows tr { display: block; }
+  #rows td { display: block; border: 0; padding: 2px 0; }
+  #rows tr.task-row td { background: transparent; }
+  #rows tr.task-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px 12px;
+    grid-template-areas: "title title" "due status" "who prio" "act act";
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    margin: 8px 0; padding: 8px 12px;
+  }
+  #rows tr.task-row.st-overdue { background: var(--late-bg); }
+  #rows tr.task-row.st-done { background: var(--done-bg); }
+  td.c-title { grid-area: title; }
+  td.c-due_date { grid-area: due; }
+  td.c-status { grid-area: status; }
+  td.c-assignees { grid-area: who; white-space: nowrap; }
+  td.c-priority { grid-area: prio; }
+  td.c-actions { grid-area: act; display: flex !important; justify-content: flex-end; align-items: center; gap: 4px; flex-wrap: wrap; }
+  td.c-notes, td.c-reminder_days { display: none !important; }   /* ficam no "Editar" do menu */
+  #rows td[data-label]::before {
+    content: attr(data-label); display: block;
+    font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em;
+  }
+  .title-wrap { padding-left: calc(var(--depth, 0) * 14px); align-items: center; }
+  .rel { display: inline; margin-left: 6px; }
+  select.status { width: 100%; }
+
+  /* faixas de projeto */
+  #rows tr.proj-row { margin-top: 14px; }
+  #rows tr.proj-row td { border-radius: 12px; padding: 4px 6px; border-top: 0; }
+  .proj-head { flex-wrap: wrap; }
+  #rows tr.proj-empty td { padding: 10px 12px; }
+
+  /* pop-ups em tela cheia */
+  dialog#modal { width: 100%; max-width: 100%; height: 100%; max-height: 100%; margin: 0; border: 0; border-radius: 0; }
+  dialog#modal[open] { display: flex; flex-direction: column; }
+  dialog#modal .m-body { flex: 1; max-height: none; min-height: 0; }
+  dialog.drawer { width: 100vw; border: 0; }
+  .m-actions { flex-wrap: wrap; }
+  .m-actions button { min-height: 44px; }
+  .mini { display: block; overflow-x: auto; }
+}
+
+/* ---------- impressão ---------- */
+@media print {
+  :root, :root[data-theme="dark"], :root:not([data-theme="light"]) {
+    --bg: #fff; --surface: #fff; --text: #000; --muted: #444; --border: #bbb;
+    --done-bg: #fff; --done-text: #000; --late-bg: #fff; --late-text: #000; --prog-text: #000;
+    --badge-bg: #eee; --row-hover: #fff; --brand-teal-light: #eee; --accent-ink: #000;
+    color-scheme: light;
+  }
+  body { background: #fff; color: #000; }
+  .topbar, .toolbar, .chips, .summary, .toast, .menu, #loading, dialog,
+  .c-actions, .task-handle, .drag-handle, .toggle, .toggle-spacer, .proj-head .actions { display: none !important; }
+  .table-wrap { padding: 0; overflow: visible; }
+  table.tasks { min-width: 0; border-color: #999; border-radius: 0; }
+  col.w-act { width: 0; }
+  select.status { display: none; }
+  .print-only { display: inline; }
+  tr { break-inside: avoid; }
+  .notes { white-space: normal; }
+  tr.paused td { opacity: 1; }
+  tr.leaving td { animation: none; }
+}

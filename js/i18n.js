@@ -16,7 +16,6 @@ export const DICT = {
     'pw.new': 'Nova senha (mínimo 8 caracteres)',
     'pw.save': 'Salvar senha',
     'pw.done': 'Senha alterada.',
-    'btn.later': 'Fechar e perguntar depois',
     'proj.up': 'Mover projeto para cima',
     'proj.down': 'Mover projeto para baixo',
     'top.tasks': 'Tarefas',
@@ -137,15 +136,15 @@ export const DICT = {
     'delete.single': 'Excluir "{title}"?\n\nEssa ação não pode ser desfeita.',
 
     'pause.title': 'Marcar como Parado',
-    'pause.text': '<strong>{title}</strong> e todas as subtarefas ficarão pausadas: sem lembretes, sem verificação de atraso e sem avisos de inatividade até você retomar.',
-    'pause.reason': 'Motivo da paralisação',
-    'pause.submit': 'Pausar',
+    'pause.text': '<strong>{title}</strong> e todas as subtarefas ficarão como "Parado": sem lembretes, sem verificação de atraso e sem avisos de inatividade até você retomar.',
+    'pause.reason': 'Por que está parado?',
+    'pause.submit': 'Marcar como Parado',
 
     'resume.title': 'Retomar tarefa',
     'resume.current': 'Prazo atual: {due} · Status atual: {status}',
-    'resume.reason': ' · Motivo da pausa: {reason}',
+    'resume.reason': ' · Motivo de estar parado: {reason}',
     'resume.hint': 'Revise prazos e status. Nada é ajustado automaticamente pelo tempo parado.',
-    'resume.expired': 'Prazo venceu durante a pausa',
+    'resume.expired': 'Prazo venceu enquanto estava parado',
     'resume.wasInProgress': 'Estava em andamento',
     'resume.submit': 'Confirmar retomada',
     'noDue': 'sem prazo',
@@ -182,6 +181,77 @@ export const DICT = {
     'rem.inDays': 'vence em <strong>{n} dias</strong>',
     'rem.assignee': 'Responsáveis: {email}',
 
+    'login.showPassword': 'Mostrar senha',
+    'loading': 'Carregando tarefas…',
+    'empty.loadError': 'Não foi possível carregar as tarefas. Verifique a conexão e recarregue a página.',
+
+    'filter.search': 'Buscar',
+    'filter.searchHint': 'Título ou observação',
+    'filter.toggle': 'Filtros',
+    'filter.shortcuts': 'Atalhos de filtro',
+    'chip.mine': 'Minhas tarefas',
+    'quick.overdue': 'Atrasadas',
+    'quick.today': 'Hoje',
+    'quick.week': 'Esta semana',
+    'quick.in_progress': 'Em andamento',
+    'sum.title': 'Resumo',
+    'sum.hint': 'Clique para filtrar; clique de novo para tirar o filtro',
+    'sum.overdue': 'Atrasadas',
+    'sum.today': 'Vencem hoje',
+    'sum.week': 'Vencem nesta semana',
+    'sum.in_progress': 'Em andamento',
+
+    'rel.today': 'hoje',
+    'rel.tomorrow': 'amanhã',
+    'rel.yesterday': 'ontem',
+    'rel.inDays': 'em {n} dias',
+    'rel.daysAgo': 'há {n} dias',
+
+    'col.actions': 'Ações',
+    'sort.hint': 'Ordenar: crescente, decrescente ou ordem padrão',
+    'status.doneBlocked': 'Conclua as subtarefas abertas antes de concluir esta tarefa.',
+
+    'delete.title': 'Excluir tarefa',
+    'form.pastDue': 'Este prazo já passou: ao salvar, a tarefa ficará como "Atrasado".',
+    'form.pastDueSaved': 'Prazo no passado: a tarefa ficou como "Atrasado".',
+
+    'menu.task': 'Mais ações: {title}',
+    'menu.project': 'Mais ações do projeto: {name}',
+    'action.move': 'Mover para…',
+    'move.title': 'Mover tarefa',
+    'move.target': 'Destino',
+    'move.choose': 'Escolha o destino',
+    'move.asMain': 'Como tarefa principal do projeto',
+    'move.inside': 'Dentro de uma tarefa de: {project}',
+    'move.submit': 'Mover',
+    'move.none': 'Não há destino disponível para esta tarefa.',
+    'move.done': '"{title}" foi movida.',
+    'move.drag': 'Arraste para outro projeto ou para cima de outra tarefa',
+    'move.errCycle': 'Não dá para mover uma tarefa para dentro dela mesma nem de uma subtarefa dela.',
+    'move.errSame': 'A tarefa já está nesse lugar.',
+
+    'btn.exportCsv': 'Exportar CSV',
+    'btn.print': 'Imprimir',
+    'csv.project': 'Projeto',
+    'csv.path': 'Caminho',
+    'csv.situation': 'Situação',
+
+    'pending.title': 'Pendências',
+    'pending.label': 'Pendências: {n}',
+    'pending.hint': 'Escolha um item para resolver. Fechar a janela do item mantém a pendência na lista.',
+    'pending.empty': 'Nenhuma pendência.',
+    'pending.toastOne': 'Você tem 1 pendência.',
+    'pending.toastMany': 'Você tem {n} pendências.',
+    'pending.view': 'Ver',
+    'pending.resolve': 'Resolver',
+    'pending.kind.overdue': 'Atraso',
+    'pending.kind.inactivity': 'Sem atividade',
+    'pending.kind.reminder': 'Lembrete',
+    'pending.overdueText': 'Venceu em {date}',
+    'pending.inactText': 'Em andamento sem movimentação há mais de 7 dias',
+    'pending.remText': 'Prazo {when} ({date})',
+    'pending.snoozed': 'Adiado para amanhã neste navegador',
+
     'err.generic': 'Algo deu errado',
     'err.openChildren': 'Não é possível concluir: esta tarefa ainda tem subtarefas abertas.',
     'err.cycle': 'Hierarquia inválida: a tarefa não pode ser descendente de si mesma.',
@@ -211,7 +281,6 @@ export const DICT = {
     'pw.new': 'New password (at least 8 characters)',
     'pw.save': 'Save password',
     'pw.done': 'Password changed.',
-    'btn.later': 'Close and ask me later',
     'proj.up': 'Move project up',
     'proj.down': 'Move project down',
     'top.tasks': 'Tasks',
@@ -332,15 +401,15 @@ export const DICT = {
     'delete.single': 'Delete "{title}"?\n\nThis cannot be undone.',
 
     'pause.title': 'Mark as Stopped',
-    'pause.text': '<strong>{title}</strong> and all its subtasks will be paused: no reminders, no overdue checks and no inactivity prompts until you resume.',
-    'pause.reason': 'Reason for stopping',
-    'pause.submit': 'Pause',
+    'pause.text': '<strong>{title}</strong> and all its subtasks will be "Stopped": no reminders, no overdue checks and no inactivity prompts until you resume.',
+    'pause.reason': 'Why is it stopped?',
+    'pause.submit': 'Mark as Stopped',
 
     'resume.title': 'Resume task',
     'resume.current': 'Current due date: {due} · Current status: {status}',
-    'resume.reason': ' · Reason for pause: {reason}',
+    'resume.reason': ' · Reason it was stopped: {reason}',
     'resume.hint': 'Review due dates and statuses. Nothing is adjusted automatically for the time stopped.',
-    'resume.expired': 'Due date passed during the pause',
+    'resume.expired': 'Due date passed while it was stopped',
     'resume.wasInProgress': 'Was in progress',
     'resume.submit': 'Confirm resume',
     'noDue': 'no due date',
@@ -376,6 +445,77 @@ export const DICT = {
     'rem.tomorrow': 'is due <strong>tomorrow</strong>',
     'rem.inDays': 'is due in <strong>{n} days</strong>',
     'rem.assignee': 'Assignees: {email}',
+
+    'login.showPassword': 'Show password',
+    'loading': 'Loading tasks…',
+    'empty.loadError': 'Could not load the tasks. Check your connection and reload the page.',
+
+    'filter.search': 'Search',
+    'filter.searchHint': 'Title or notes',
+    'filter.toggle': 'Filters',
+    'filter.shortcuts': 'Filter shortcuts',
+    'chip.mine': 'My tasks',
+    'quick.overdue': 'Overdue',
+    'quick.today': 'Today',
+    'quick.week': 'This week',
+    'quick.in_progress': 'In progress',
+    'sum.title': 'Summary',
+    'sum.hint': 'Click to filter; click again to remove the filter',
+    'sum.overdue': 'Overdue',
+    'sum.today': 'Due today',
+    'sum.week': 'Due this week',
+    'sum.in_progress': 'In progress',
+
+    'rel.today': 'today',
+    'rel.tomorrow': 'tomorrow',
+    'rel.yesterday': 'yesterday',
+    'rel.inDays': 'in {n} days',
+    'rel.daysAgo': '{n} days ago',
+
+    'col.actions': 'Actions',
+    'sort.hint': 'Sort: ascending, descending or default order',
+    'status.doneBlocked': 'Finish the open subtasks before completing this task.',
+
+    'delete.title': 'Delete task',
+    'form.pastDue': 'This due date has passed: once saved, the task will be "Overdue".',
+    'form.pastDueSaved': 'Due date in the past: the task is now "Overdue".',
+
+    'menu.task': 'More actions: {title}',
+    'menu.project': 'More project actions: {name}',
+    'action.move': 'Move to…',
+    'move.title': 'Move task',
+    'move.target': 'Destination',
+    'move.choose': 'Choose the destination',
+    'move.asMain': 'As a main task of the project',
+    'move.inside': 'Inside a task of: {project}',
+    'move.submit': 'Move',
+    'move.none': 'There is no available destination for this task.',
+    'move.done': '"{title}" was moved.',
+    'move.drag': 'Drag to another project or onto another task',
+    'move.errCycle': 'A task cannot be moved into itself or into one of its subtasks.',
+    'move.errSame': 'The task is already there.',
+
+    'btn.exportCsv': 'Export CSV',
+    'btn.print': 'Print',
+    'csv.project': 'Project',
+    'csv.path': 'Path',
+    'csv.situation': 'Situation',
+
+    'pending.title': 'Pending items',
+    'pending.label': 'Pending items: {n}',
+    'pending.hint': 'Pick an item to resolve. Closing the item window keeps it on the list.',
+    'pending.empty': 'Nothing pending.',
+    'pending.toastOne': 'You have 1 pending item.',
+    'pending.toastMany': 'You have {n} pending items.',
+    'pending.view': 'View',
+    'pending.resolve': 'Resolve',
+    'pending.kind.overdue': 'Overdue',
+    'pending.kind.inactivity': 'No activity',
+    'pending.kind.reminder': 'Reminder',
+    'pending.overdueText': 'Was due on {date}',
+    'pending.inactText': 'In progress with no activity for more than 7 days',
+    'pending.remText': 'Due {when} ({date})',
+    'pending.snoozed': 'Snoozed until tomorrow in this browser',
 
     'err.generic': 'Something went wrong',
     'err.openChildren': 'Cannot complete: this task still has open subtasks.',
@@ -430,11 +570,21 @@ export function fmtDate(iso) {
   return new Intl.DateTimeFormat(LOCALE[lang], { timeZone: 'UTC' }).format(new Date(Date.UTC(y, m - 1, d)));
 }
 
-// Textos estáticos do HTML: data-i18n (texto), data-i18n-title, data-i18n-aria
+// Prazo relativo a hoje, em dias de calendário (dayDiff): 0 = "hoje", 3 = "em 3 dias", -3 = "há 3 dias"
+export function fmtRelative(days) {
+  if (days === 0) return t('rel.today');
+  if (days === 1) return t('rel.tomorrow');
+  if (days === -1) return t('rel.yesterday');
+  return days > 0 ? t('rel.inDays', { n: days }) : t('rel.daysAgo', { n: -days });
+}
+
+// Textos estáticos do HTML: data-i18n (texto), data-i18n-title, data-i18n-aria, data-i18n-placeholder
 export function applyStatic(root = document) {
   document.documentElement.lang = LOCALE[lang];
   root.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
   root.querySelectorAll('[data-i18n-aria]').forEach(el => { el.setAttribute('aria-label', t(el.dataset.i18nAria)); });
+  root.querySelectorAll('[data-i18n-title]').forEach(el => { el.title = t(el.dataset.i18nTitle); });
+  root.querySelectorAll('[data-i18n-placeholder]').forEach(el => { el.placeholder = t(el.dataset.i18nPlaceholder); });
 }
 
 // Mensagens do banco (escritas em português no schema.sql) -> chave traduzida

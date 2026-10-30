@@ -3,32 +3,46 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/+esm';
 import { SUPABASE_URL, SUPABASE_KEY, REFRESH_MINUTES } from './config.js';
 import {
-  DEFAULT_FILTERS, todayISO, buildForest, descendants, ancestors, rootsFor,
+  todayISO, buildForest, descendants, ancestors, rootOf, rootsFor,
   isFilterActive, isRowFilterActive, computeVisible, flatten, toggleNode,
   NO_PROJECT, filterRootsByProject, groupByProject, orderedKeys,
+  QUICK, freshFilters, dayDiff, summaryCounts, sortComparator, nextSort, sanitizeFilters, sanitizeSort,
+  moveError, movePatch, hasOpenChildren,
 } from './tree.js';
-import { t, getLang, setLang, LANGS, fmtDate, applyStatic, translateError } from './i18n.js';
+import { toCSV } from './csv.js';
+import { t, getLang, setLang, LANGS, fmtDate, fmtRelative, applyStatic, translateError } from './i18n.js';
 
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 const $ = sel => document.querySelector(sel);
 const dlg = $('#modal');
+const drawer = $('#drawer');
 
 // ---------- estado ----------
+const emptyPending = () => ({ overdue: [], inactivity: [], reminders: [] });
 const state = {
   view: 'main',
-  filters: { main: { ...DEFAULT_FILTERS }, history: { ...DEFAULT_FILTERS } },
+  filters: { main: freshFilters(), history: freshFilters() },
+  sort: { main: null, history: null },   // ordenação escolhida no cabeçalho (null = padrão)
   forest: { byId: new Map(), roots: [] },
   projects: [],
   projectOrder: [],     // ids na ordem escolhida pelo usuário (arrastar e soltar)
   members: [],          // compartilhamentos visíveis (project_members)
   users: [],            // usuários cadastrados (id, email)
   userId: null,
+  me: '',               // e-mail do usuário logado (atalho "Minhas tarefas")
   collapsedProjects: new Set(),
   collapsed: new Set(),
   expanded: new Set(),
   leaving: new Set(),   // raízes recém-concluídas, ainda visíveis na tela principal
+  openRoots: new Set(), // raízes abertas na última carga do banco (para anunciar as que concluíram)
+  pending: emptyPending(),   // pendências devolvidas por refresh_automations
+  notified: new Set(),  // pendências já avisadas no toast
   busy: false,          // verificação de automações em andamento
   editing: false,       // edição direta ou arraste em andamento: pausa a atualização automática
+  dirty: false,         // chegou dado novo durante a edição: redesenha quando ela terminar
+  loading: false,       // primeira carga da sessão ainda não chegou
+  loadError: false,
+  printing: false,      // impressão: mostra tudo expandido
   loadedAt: 0,          // quando a lista foi carregada pela última vez (ms)
   usersAt: 0,           // idem para a lista de usuários
 };
@@ -57,7 +71,6 @@ function toast(msg, isError = false, action = null) {
     if (box) {
       box.textContent = msg;
       box.hidden = false;
-      dlg.querySelector('.m-escape')?.removeAttribute('hidden');   // pop-up obrigatório com erro: dá uma saída
       return;
     }
   }
@@ -92,9 +105,36 @@ function guard(handler) {
 }
 
 function switchView(view) {
+  closeMenu(false);
   state.view = view;
-  document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.view === view));
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.view === view);
+    tab.setAttribute('aria-pressed', String(tab.dataset.view === view));
+  });
   render();
+}
+
+// ---------- foco ----------
+// O render troca o HTML da tabela; para não jogar o foco do teclado no <body>, guarda
+// "qual controle" estava focado (linha + ação/campo) e devolve o foco ao equivalente novo.
+function focusKey(el) {
+  if (!el || el === document.body || !$('#app').contains(el)) return null;
+  if (el.id) return '#' + CSS.escape(el.id);
+  const attr = ['action', 'field', 'sort', 'chip', 'quick'].find(a => el.dataset?.[a] != null);
+  if (!attr) return null;
+  const sel = `[data-${attr}="${CSS.escape(el.dataset[attr])}"]`;
+  const tr = el.closest('tr[data-id], tr[data-project]');
+  if (!tr) return el.closest('#head') ? `#head ${sel}` : sel;
+  return tr.dataset.id
+    ? `tr[data-id="${CSS.escape(tr.dataset.id)}"] ${sel}`
+    : `tr[data-project="${CSS.escape(tr.dataset.project)}"] ${sel}`;
+}
+
+function refocus(key) {
+  if (!key || dlg.open || drawer.open) return;
+  const a = document.activeElement;
+  if (a && a !== document.body && a.isConnected) return;   // o usuário já está em outro lugar
+  document.querySelector(key)?.focus({ preventScroll: true });
 }
 
 // Árvore que acabou de ser concluída: continua na tela por alguns segundos
@@ -108,7 +148,7 @@ function announceFinished(roots) {
   toast(msg, false, { label: t('done.viewHistory'), onClick: () => switchView('history') });
   setTimeout(() => {
     roots.forEach(r => state.leaving.delete(r.id));
-    render();
+    renderSoon();
   }, LEAVE_MS);
 }
 
@@ -118,18 +158,46 @@ function fail(error) {
   return false;
 }
 
-function openDialog(title, bodyHtml, { mandatory = false } = {}) {
+// Foco inicial do pop-up: o primeiro campo do formulário; sem campo, o botão principal.
+// (O ✕ do topo é o primeiro focável do HTML: sem isto, Enter fecharia a janela.)
+function focusFirstField(root) {
+  const usable = el => !el.disabled && !el.closest('[hidden]');
+  const pick = sel => [...root.querySelectorAll(sel)].find(usable);
+  const el = pick('input:not([type=hidden]), select, textarea') || pick('button.primary') || pick('.m-body button');
+  el?.focus();
+}
+
+function openDialog(title, bodyHtml) {
+  const back = focusKey(document.activeElement);   // ao fechar, volta para quem abriu
   dlg.innerHTML = `
     <div class="m-head">
-      <h2>${esc(title)}</h2>
-      ${mandatory ? '' : `<button type="button" class="icon" data-close aria-label="${t('action.close')}">✕</button>`}
+      <h2 id="modal-title">${esc(title)}</h2>
+      <button type="button" class="icon" data-close aria-label="${t('action.close')}">✕</button>
     </div>
-    <div class="m-body">${bodyHtml}<p class="error m-error" role="alert" hidden></p>
-      ${mandatory ? `<button type="button" class="m-escape" data-close hidden>${t('btn.later')}</button>` : ''}</div>`;
-  dlg.oncancel = e => { if (mandatory) e.preventDefault(); };   // ESC não fecha pop-up obrigatório
+    <div class="m-body">${bodyHtml}<p class="error m-error" role="alert" hidden></p></div>`;
+  dlg.setAttribute('aria-labelledby', 'modal-title');
   dlg.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => dlg.close()));
   dlg.showModal();
-  return new Promise(resolve => dlg.addEventListener('close', resolve, { once: true }));
+  focusFirstField(dlg.querySelector('.m-body'));
+  return new Promise(resolve => dlg.addEventListener('close', () => {
+    resolve();
+    setTimeout(() => refocus(back), 0);
+  }, { once: true }));
+}
+
+// Confirmação no lugar do confirm() nativo. message é texto puro (escapado aqui).
+// Em ações destrutivas o foco começa em "Cancelar": Enter por engano não apaga nada.
+function confirmDialog({ title, message, confirmLabel = t('btn.confirm'), danger = false }) {
+  let ok = false;
+  const done = openDialog(title, `
+    <p class="pre">${esc(message)}</p>
+    <div class="m-actions">
+      <button type="button" data-close>${t('btn.cancel')}</button>
+      <button type="button" class="${danger ? 'danger-btn' : 'primary'}" data-ok>${esc(confirmLabel)}</button>
+    </div>`);
+  dlg.querySelector('[data-ok]').addEventListener('click', () => { ok = true; dlg.close(); });
+  (danger ? dlg.querySelector('.m-actions [data-close]') : dlg.querySelector('[data-ok]')).focus();
+  return done.then(() => ok);
 }
 
 function pathHtml(node) {
@@ -140,12 +208,14 @@ function pathHtml(node) {
 function statusText(s) { return t('status.' + s); }
 
 const ICON = {
-  play: '<svg viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></svg>',
-  pause: '<svg viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></svg>',
-  plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
-  edit: '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
-  trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
-  share: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 11a3 3 0 1 0 0-6M18 20c0-2.4-1-4.4-2.6-5.3"/></svg>',
+  play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg>',
+  stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+  share: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M16 11a3 3 0 1 0 0-6M18 20c0-2.4-1-4.4-2.6-5.3"/></svg>',
+  more: '<svg viewBox="0 0 24 24" aria-hidden="true" class="dots"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>',
+  move: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/></svg>',
 };
 
 // ---------- permissões (o banco garante; aqui só decide o que mostrar) ----------
@@ -153,56 +223,88 @@ const isOwner = p => !!p && p.owner_id === state.userId;
 const myRole = p => state.members.find(m => m.project_id === p?.id && m.user_id === state.userId)?.role;
 const canEditProject = p => isOwner(p) || myRole(p) === 'editor';
 const userEmail = id => state.users.find(u => u.id === id)?.email ?? '?';
+const projectById = key => state.projects.find(p => p.id === key);
 
-function rootOf(node) { let r = node; while (r.parent) r = r.parent; return r; }
 function canEditNode(node) {
   const root = rootOf(node);
   if (!root.project_id) return true;   // sem projeto: só o dono enxerga
-  return canEditProject(state.projects.find(p => p.id === root.project_id));
+  return canEditProject(projectById(root.project_id));
 }
+
+// Regras de "mover" na linguagem de tree.js (moveError)
+const moveCtx = () => ({
+  canEditNode,
+  canEditProject: key => key === NO_PROJECT || canEditProject(projectById(key)),
+  ownsProject: key => key === NO_PROJECT || isOwner(projectById(key)),
+});
 
 // ---------- dados ----------
 let loadSeq = 0;
 async function loadTasks() {
   const seq = ++loadSeq;
+  const uid = state.userId;
   const [{ data, error }, proj, mem, ord] = await Promise.all([
     sb.from('tasks').select('*'),
     sb.from('projects').select('*'),
     sb.from('project_members').select('*'),
     sb.from('project_order').select('project_id, position').order('position'),
   ]);
-  if (seq !== loadSeq) return true;   // chegou uma carga mais nova: esta resposta é velha, descarta
-  if (error || proj.error || mem.error || ord.error) return fail(error || proj.error || mem.error || ord.error);
+  if (seq !== loadSeq || uid !== state.userId) return true;   // resposta velha (ou de outra sessão): descarta
+  const err = error || proj.error || mem.error || ord.error;
+  if (err) {
+    if (state.loading) { state.loading = false; state.loadError = true; render(); }
+    return fail(err);
+  }
+  state.loading = false;
+  state.loadError = false;
   state.loadedAt = Date.now();
   state.projects = proj.data;
   state.projectOrder = ord.data.map(o => o.project_id ?? NO_PROJECT);   // nulo = "Sem projeto"
   state.members = mem.data;
-  const wasOpen = new Set(state.forest.roots.filter(r => r.status !== 'done').map(r => r.id));
+  prunePrefs();
+  // compara com a última carga do banco (não com a tela, que pode ter mudanças otimistas)
+  const wasOpen = state.openRoots;
   state.forest = buildForest(data);
+  state.openRoots = new Set(state.forest.roots.filter(r => r.status !== 'done').map(r => r.id));
   const finished = state.forest.roots.filter(r => r.status === 'done' && wasOpen.has(r.id));
   if (finished.length) announceFinished(finished);
-  render();
+  renderSoon();
+  if (drawer.open) renderDrawer();
   return true;
 }
 
-// Aplica regras de tempo no banco e mostra os pop-ups pendentes (regras 9, 10, 12)
-async function runAutomations() {
+// Mudança otimista: aplica na tela já, antes da resposta do banco. Devolve os valores
+// antigos (para desfazer se o banco recusar). Remonta a árvore para manter a ordem.
+function patchTask(id, patch) {
+  const node = state.forest.byId.get(id);
+  if (!node) return null;
+  const prev = Object.fromEntries(Object.keys(patch).map(k => [k, node[k]]));
+  const raw = [...state.forest.byId.values()]
+    .map(({ children, parent, depth, paused, ...rest }) => rest.id === id ? { ...rest, ...patch } : rest);
+  state.forest = buildForest(raw);
+  return prev;
+}
+
+// Aplica regras de tempo no banco e atualiza as pendências (regras 9, 10, 12).
+// Não abre mais pop-ups em sequência: só atualiza o sino e, se houver novidade, avisa uma vez.
+async function runAutomations({ notify = true } = {}) {
   if (state.busy || dlg.open || state.editing) return;   // não atrapalha quem está digitando
   state.busy = true;
+  const uid = state.userId;
   try {
     const { data, error } = await sb.rpc('refresh_automations');
-    if (error) return fail(error);
+    if (uid !== state.userId) return;
+    if (error) { fail(error); await loadTasks(); return; }   // sem automações, a lista ainda aparece
     await loadTasks();
-    const snoozed = snoozedToday();
-    for (const p of data.overdue) if (!snoozed.has(p.event_id)) await overduePopup(p);
-    for (const p of data.inactivity) await inactivityPopup(p.task_id);
-    for (const p of data.reminders) await reminderPopup(p);
+    if (uid !== state.userId) return;
+    setPending(data);
+    if (notify) notifyPending();
   } finally {
     state.busy = false;
   }
 }
 
-// Depois de qualquer alteração: só recarrega a lista. Os pop-ups ficam para
+// Depois de qualquer alteração: só recarrega a lista. As pendências ficam para
 // a verificação periódica (REFRESH_MINUTES), para não interromper quem está trabalhando.
 async function afterChange() {
   return loadTasks();
@@ -218,15 +320,18 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // "Lembrar amanhã" no pop-up de atraso. Fica salvo só neste navegador, por usuário:
-// { [event_id]: 'AAAA-MM-DD' } = não mostrar esse atraso de novo nesse dia.
+// { [event_id]: 'AAAA-MM-DD' } = não avisar esse atraso de novo nesse dia.
 const snoozeKey = () => `cajuca.snooze.${state.userId}`;
 
 function snoozedToday() {
+  if (!state.userId) return new Set();
   const today = todayISO();
   try {
     const all = JSON.parse(localStorage.getItem(snoozeKey()) || '{}');
     const kept = Object.fromEntries(Object.entries(all).filter(([, day]) => day === today));
-    localStorage.setItem(snoozeKey(), JSON.stringify(kept));   // descarta adiamentos de dias anteriores
+    if (Object.keys(kept).length !== Object.keys(all).length) {
+      localStorage.setItem(snoozeKey(), JSON.stringify(kept));   // descarta adiamentos de dias anteriores
+    }
     return new Set(Object.keys(kept));
   } catch { return new Set(); }
 }
@@ -237,6 +342,42 @@ function snoozeOverdue(eventId) {
     all[eventId] = todayISO();
     localStorage.setItem(snoozeKey(), JSON.stringify(all));
   } catch { /* navegador sem armazenamento: o aviso volta na próxima verificação */ }
+}
+
+// ---------- preferências por usuário (neste navegador) ----------
+// Filtros de cada visão, ordenação e projetos recolhidos. Tudo é validado na leitura.
+const prefsKey = () => `cajuca.prefs.${state.userId}`;
+
+function loadPrefs() {
+  let raw = null;
+  try { raw = JSON.parse(localStorage.getItem(prefsKey()) || 'null'); } catch { raw = null; }
+  state.filters = { main: sanitizeFilters(raw?.filters?.main, 'main'), history: sanitizeFilters(raw?.filters?.history, 'history') };
+  state.sort = { main: sanitizeSort(raw?.sort?.main), history: sanitizeSort(raw?.sort?.history) };
+  const cp = Array.isArray(raw?.collapsedProjects) ? raw.collapsedProjects : [];
+  state.collapsedProjects = new Set(cp.filter(k => typeof k === 'string' && k.length <= 100).slice(0, 500));
+}
+
+function savePrefs() {
+  if (!state.userId) return;
+  try {
+    localStorage.setItem(prefsKey(), JSON.stringify({
+      filters: state.filters, sort: state.sort, collapsedProjects: [...state.collapsedProjects],
+    }));
+  } catch { /* sem armazenamento: vale só nesta visita */ }
+}
+
+// Depois de carregar: solta projetos que não existem mais (excluídos ou descompartilhados)
+function prunePrefs() {
+  const valid = new Set([...state.projects.map(p => p.id), NO_PROJECT]);
+  let changed = false;
+  for (const f of Object.values(state.filters)) {
+    const kept = f.projects.filter(k => valid.has(k));
+    if (kept.length !== f.projects.length) { f.projects = kept; changed = true; }
+  }
+  for (const k of [...state.collapsedProjects]) {
+    if (!valid.has(k)) { state.collapsedProjects.delete(k); changed = true; }
+  }
+  if (changed) savePrefs();
 }
 
 // ---------- renderização ----------
@@ -254,21 +395,29 @@ function renderFilters() {
   // sem repetir "Ana" e "ana" (o banco as trata como a mesma pessoa)
   const emails = [...new Map([...state.forest.byId.values()].flatMap(t => t.assignees || []).map(e => [e.toLowerCase(), e])).values()]
     .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-  // responsável que não existe mais em nenhuma tarefa: solta o filtro (senão a lista fica vazia sem explicação)
-  if (f.assignee && f.assignee !== '__none__' && !emails.some(e => e.toLowerCase() === f.assignee.toLowerCase())) f.assignee = '';
+  // responsável que não existe mais em nenhuma tarefa: solta o filtro (senão a lista fica vazia sem explicação).
+  // Durante a carga a lista ainda está vazia: não mexe no filtro salvo.
+  if (!state.loading && f.assignee && f.assignee !== '__none__' && !emails.some(e => e.toLowerCase() === f.assignee.toLowerCase())) f.assignee = '';
   $('#f-assignee').innerHTML = `<option value="">${t('filter.everyone')}</option><option value="__none__">${t('filter.noAssignee')}</option>`
     + emails.map(e => `<option value="${esc(e)}">${esc(e)}</option>`).join('');
   $('#f-assignee').value = [...$('#f-assignee').options].find(o => o.value.toLowerCase() === f.assignee.toLowerCase())?.value ?? '';
 
+  // busca: não reescreve enquanto a pessoa digita
+  const q = $('#f-q');
+  if (document.activeElement !== q && q.value !== f.q) q.value = f.q;
+
   renderProjectFilter(f);
-  $('#f-clear').hidden = !isFilterActive(f);
+  renderChips(f);
+  const active = isFilterActive(f);
+  $('#f-clear').hidden = !active;
+  $('#f-toggle .dot').hidden = !active;
   $('#new-task').hidden = state.view !== 'main';
   $('#new-project').hidden = state.view !== 'main';
 }
 
 const projectName = key => key === NO_PROJECT
   ? t('proj.none')
-  : state.projects.find(p => p.id === key)?.name ?? t('proj.none');
+  : projectById(key)?.name ?? t('proj.none');
 
 // Filtro de projeto: lista de checkboxes (dá para marcar mais de um)
 function renderProjectFilter(f) {
@@ -285,54 +434,129 @@ function renderProjectFilter(f) {
     : t('filter.nSelected', { n: f.projects.length });
 }
 
-function statusCell(n, readOnly = false) {
-  if (readOnly) return `<span class="status-text">${statusText(n.status)}</span>`;
-  const opts = ['not_started', 'in_progress', 'done']
-    .map(s => `<option value="${s}" ${n.status === s ? 'selected' : ''}>${statusText(s)}</option>`);
-  if (n.status === 'overdue') opts.unshift(`<option value="overdue" selected disabled>${statusText('overdue')}</option>`);
-  return `<select class="status" data-action="status" aria-label="${t('col.status')}">${opts.join('')}</select>`;
+// Chips e cartões do resumo são montados uma vez por idioma (buildShortcuts) e só
+// atualizados aqui: o foco do teclado não se perde ao clicar.
+function buildShortcuts() {
+  $('#chips').innerHTML = [['mine', 'chip.mine'], ...QUICK.map(k => [k, 'quick.' + k])]
+    .map(([k, key]) => `<button type="button" class="chip" data-chip="${k}" aria-pressed="false">${t(key)}</button>`).join('');
+  $('#summary').innerHTML = QUICK.map(k => `
+    <button type="button" class="sum-card sum-${k}" data-quick="${k}" aria-pressed="false" title="${t('sum.hint')}">
+      <span class="sum-n">0</span><span class="sum-l">${t('sum.' + k)}</span>
+    </button>`).join('');
 }
 
-function rowHtml({ node: n, showingAll }, leaving = false, readOnly = false) {
+function renderChips(f) {
+  $('#chips').querySelectorAll('[data-chip]').forEach(b => {
+    const k = b.dataset.chip;
+    b.hidden = k !== 'mine' && state.view !== 'main';   // atalhos de prazo não fazem sentido no histórico
+    b.setAttribute('aria-pressed', String(k === 'mine' ? !!f.mine : f.quick === k));
+  });
+}
+
+// Resumo: conta as tarefas abertas da tela principal, respeitando só o filtro de projeto
+function renderSummary(today) {
+  const box = $('#summary');
+  box.hidden = state.view !== 'main' || state.loading;
+  if (box.hidden) return;
+  const f = state.filters.main;
+  const counts = summaryCounts(filterRootsByProject(rootsFor('main', state.forest), f.projects), today);
+  box.querySelectorAll('[data-quick]').forEach(b => {
+    b.querySelector('.sum-n').textContent = counts[b.dataset.quick];
+    b.setAttribute('aria-pressed', String(f.quick === b.dataset.quick));
+  });
+}
+
+// Cabeçalho: colunas ordenáveis viram botões (aria-sort na coluna ordenada)
+const COLS = [
+  ['title', 'col.task', true], ['notes', 'col.notes'], ['priority', 'col.priority', true],
+  ['due_date', 'col.due', true], ['reminder_days', 'col.reminder'], ['assignees', 'col.assignee'],
+  ['status', 'col.status', true], ['actions', 'col.actions'],
+];
+function renderHead() {
+  const s = state.sort[state.view];
+  $('#head').innerHTML = `<tr>${COLS.map(([k, label, sortable]) => {
+    if (k === 'actions') return `<th class="c-actions"><span class="sr-only">${t(label)}</span></th>`;
+    if (!sortable) return `<th class="c-${k}">${t(label)}</th>`;
+    const dir = s?.key === k ? s.dir : null;
+    return `<th class="c-${k}"${dir ? ` aria-sort="${dir === 'asc' ? 'ascending' : 'descending'}"` : ''}>
+      <button type="button" class="sort" data-sort="${k}" title="${t('sort.hint')}">${t(label)}<span class="sort-ind" aria-hidden="true">${dir === 'asc' ? '▲' : dir === 'desc' ? '▼' : '↕'}</span></button></th>`;
+  }).join('')}</tr>`;
+}
+
+function statusCell(n, readOnly = false) {
+  const print = `<span class="print-only">${statusText(n.status)}</span>`;
+  if (readOnly) return `<span class="status-text">${statusText(n.status)}</span>`;
+  // regra 8: com subtarefas abertas, "Concluído" fica indisponível (o banco confere de novo)
+  const blocked = n.status !== 'done' && hasOpenChildren(n);
+  const hint = blocked ? ` title="${t('status.doneBlocked')}"` : '';
+  const opts = ['not_started', 'in_progress', 'done'].map(s => `<option value="${s}" ${n.status === s ? 'selected' : ''}${s === 'done' && blocked ? ` disabled${hint}` : ''}>${statusText(s)}</option>`);
+  if (n.status === 'overdue') opts.unshift(`<option value="overdue" selected disabled>${statusText('overdue')}</option>`);
+  return `<select class="status" data-action="status" aria-label="${t('col.status')}"${hint}>${opts.join('')}</select>${print}`;
+}
+
+function situationBadge(n) {
+  if (!n.blocking_status || n.blocking_status === 'in_progress') return '';
+  const stopped = n.blocking_status === 'stopped';
+  return `<span class="badge ${stopped ? 'stopped' : ''}" title="${esc(n.blocking_reason || '')}">${stopped ? ICON.stop : ''}${t('situation.' + n.blocking_status)}</span>`;
+}
+
+const DASH = '<span class="muted">—</span>';
+
+// Conteúdo de cada célula editável (usado pela linha e pela edição direta)
+function cellDisplay(n, field, today = todayISO()) {
+  switch (field) {
+    case 'title': return `<strong>${esc(n.title)}</strong>${situationBadge(n)}`;
+    case 'notes': return esc(n.notes);
+    case 'priority': return n.priority ? `<span class="prio-yes">${t('yes')}</span>` : `<span class="muted">${t('no')}</span>`;
+    case 'due_date': {
+      if (!n.due_date) return DASH;
+      const rel = n.status !== 'done' ? `<span class="rel">${esc(fmtRelative(dayDiff(today, n.due_date)))}</span>` : '';
+      return `<span class="date">${fmtDate(n.due_date)}</span>${rel}`;
+    }
+    case 'reminder_days': return n.reminder_days != null ? t('days.short', { n: n.reminder_days }) : DASH;
+    case 'assignees': return esc(fmtAssignees(n.assignees)) || DASH;
+    default: return '';
+  }
+}
+
+function rowHtml({ node: n, showingAll }, { leaving = false, readOnly = false, today }) {
   const hasKids = n.children.length > 0;
   const toggle = hasKids
-    ? `<button class="toggle" data-action="toggle" data-all="${showingAll}" aria-label="${t('action.toggle')}">${showingAll ? '▾' : '▸'}</button>`
+    ? `<button type="button" class="toggle" data-action="toggle" data-all="${showingAll}" aria-expanded="${showingAll}" aria-label="${t('action.toggle')}">${showingAll ? '▾' : '▸'}</button>`
     : '<span class="toggle-spacer"></span>';
-
-  const sit = n.blocking_status && n.blocking_status !== 'in_progress'
-    ? `<span class="badge ${n.blocking_status === 'stopped' ? 'stopped' : ''}" title="${esc(n.blocking_reason || '')}">${t('situation.' + n.blocking_status)}</span>`
-    : '';
+  // alça de arraste: só na tela principal e para quem pode editar (teclado: "Mover para…" no menu)
+  const handle = !readOnly && state.view === 'main'
+    ? `<span class="task-handle" data-drag-task title="${t('move.drag')}" aria-hidden="true">⋮⋮</span>` : '';
 
   const isStopped = n.blocking_status === 'stopped';
   const actions = readOnly ? '' : `
-    ${isStopped ? `<button class="icon resume" data-action="resume" title="${t('action.resume')}">${ICON.play}${t('action.resume')}</button>` : ''}
-    ${!n.paused && n.status !== 'done' ? `<button class="icon" data-action="pause" title="${t('action.pause')}" aria-label="${t('action.pause')}">${ICON.pause}</button>` : ''}
-    <button class="icon" data-action="add" title="${t('action.addSub')}" aria-label="${t('action.addSub')}">${ICON.plus}</button>
-    <button class="icon" data-action="edit" title="${t('action.edit')}" aria-label="${t('action.edit')}">${ICON.edit}</button>
-    <button class="icon danger" data-action="delete" title="${t('action.delete')}" aria-label="${t('action.delete')}">${ICON.trash}</button>`;
+    ${isStopped ? `<button type="button" class="icon resume" data-action="resume" title="${t('action.resume')}">${ICON.play}<span>${t('action.resume')}</span></button>` : ''}
+    <button type="button" class="icon" data-action="add" title="${t('action.addSub')}" aria-label="${t('action.addSub')}">${ICON.plus}</button>
+    <button type="button" class="icon" data-action="menu" aria-haspopup="menu" aria-expanded="false" title="${t('col.actions')}" aria-label="${esc(t('menu.task', { title: n.title }))}">${ICON.more}</button>`;
 
   // edição direta: clicar na célula abre o campo (só para quem pode editar)
   const ed = field => readOnly ? '' : ` data-field="${field}" tabindex="0"`;   // tabindex: dá para editar pelo teclado (Enter)
+  const cell = f => cellDisplay(n, f, today);
   return `
-    <tr class="st-${n.status} ${n.paused ? 'paused' : ''} ${leaving ? 'leaving' : ''} ${readOnly ? 'ro' : ''}" data-id="${n.id}">
-      <td>
-        <div class="title-wrap" style="padding-left:${n.depth * 22}px">
-          ${toggle}
-          <span class="title-text"${ed('title')}><strong>${esc(n.title)}</strong>${sit}</span>
+    <tr class="task-row st-${n.status} ${n.paused ? 'paused' : ''} ${leaving ? 'leaving' : ''} ${readOnly ? 'ro' : ''}" data-id="${esc(n.id)}">
+      <td class="c-title">
+        <div class="title-wrap" style="--depth:${n.depth}">
+          ${handle}${toggle}
+          <span class="title-text"${ed('title')}>${cell('title')}</span>
         </div>
       </td>
-      <td class="notes" title="${esc(n.notes)}"${ed('notes')}>${esc(n.notes)}</td>
-      <td${ed('priority')}>${n.priority ? `<span class="prio-yes">${t('yes')}</span>` : `<span class="muted">${t('no')}</span>`}</td>
-      <td${ed('due_date')}>${n.due_date ? fmtDate(n.due_date) : '<span class="muted">—</span>'}</td>
-      <td${ed('reminder_days')}>${n.reminder_days != null ? t('days.short', { n: n.reminder_days }) : '<span class="muted">—</span>'}</td>
-      <td title="${esc(fmtAssignees(n.assignees))}"${ed('assignees')}>${esc(fmtAssignees(n.assignees)) || '<span class="muted">—</span>'}</td>
-      <td>${statusCell(n, readOnly)}</td>
-      <td class="actions">${actions}</td>
+      <td class="c-notes notes" title="${esc(n.notes)}"${ed('notes')}>${cell('notes')}</td>
+      <td class="c-priority" data-label="${t('col.priority')}"${ed('priority')}>${cell('priority')}</td>
+      <td class="c-due_date" data-label="${t('col.due')}"${ed('due_date')}>${cell('due_date')}</td>
+      <td class="c-reminder_days"${ed('reminder_days')}>${cell('reminder_days')}</td>
+      <td class="c-assignees" data-label="${t('col.assignee')}" title="${esc(fmtAssignees(n.assignees))}"${ed('assignees')}>${cell('assignees')}</td>
+      <td class="c-status" data-label="${t('col.status')}">${statusCell(n, readOnly)}</td>
+      <td class="c-actions actions">${actions}</td>
     </tr>`;
 }
 
-function render() {
-  renderFilters();
+// O que a visão atual mostra (usado pela tela, pela impressão e pelo CSV)
+function viewModel() {
   const f = state.filters[state.view];
   const today = todayISO();
   let roots = rootsFor(state.view, state.forest);
@@ -340,9 +564,8 @@ function render() {
     roots = state.forest.roots.filter(r => r.status !== 'done' || state.leaving.has(r.id));
   }
   roots = filterRootsByProject(roots, f.projects);
-  const filterActive = isFilterActive(f);
   const rowFilterActive = isRowFilterActive(f);
-  const visible = computeVisible(roots, f, state.view, today);
+  const visible = computeVisible(roots, f, state.view, today, { me: state.me });
   const shownRoots = rowFilterActive ? roots.filter(r => visible.has(r.id)) : roots;
   // sem filtro de linha, a tela principal mostra todos os projetos cadastrados (mesmo vazios)
   const groups = groupByProject(shownRoots, state.projects, {
@@ -350,6 +573,33 @@ function render() {
     includeEmpty: state.view === 'main' && !rowFilterActive,
     order: state.projectOrder,
   });
+  return { f, today, groups, visible, rowFilterActive, filterActive: isFilterActive(f), compare: sortComparator(state.sort[state.view]) };
+}
+
+// Redesenha já, a não ser que o usuário esteja editando/arrastando ou com o menu aberto:
+// aí só marca e o redesenho acontece quando ele terminar (não some com o que ele faz).
+function renderSoon() {
+  if (state.editing || !$('#menu').hidden) { state.dirty = true; return; }
+  render();
+}
+
+function render() {
+  state.dirty = false;
+  const fk = focusKey(document.activeElement);
+  closeMenu(false);
+  renderFilters();
+  renderHead();
+  renderPendingButton();
+  const vm = viewModel();
+  renderSummary(vm.today);
+
+  const empty = $('#empty');
+  $('#loading').hidden = !state.loading;
+  if (state.loading) {
+    $('#rows').innerHTML = '';
+    empty.hidden = true;
+    return;
+  }
 
   const leavingIds = new Set();
   if (state.view === 'main') {
@@ -358,33 +608,40 @@ function render() {
       if (r) [r, ...descendants(r)].forEach(n => leavingIds.add(n.id));
     });
   }
+  const collapsed = state.printing ? new Set() : state.collapsed;
   let html = '';
-  for (const g of groups) {
-    const open = !state.collapsedProjects.has(g.key);
+  for (const g of vm.groups) {
+    const open = state.printing || !state.collapsedProjects.has(g.key);
     html += projectRowHtml(g, open);
     if (!open) continue;
-    const rows = flatten(g.roots, { filterActive: rowFilterActive, visible, collapsed: state.collapsed, expanded: state.expanded });
+    const rows = flatten(g.roots, { filterActive: vm.rowFilterActive, visible: vm.visible, collapsed, expanded: state.expanded, compare: vm.compare });
+    const readOnly = g.project ? !canEditProject(g.project) : false;
     html += rows.length
-      ? rows.map(r => rowHtml(r, leavingIds.has(r.node.id), g.project ? !canEditProject(g.project) : false)).join('')
-      : `<tr class="proj-empty"><td colspan="8">${t('proj.empty')}</td></tr>`;
+      ? rows.map(r => rowHtml(r, { leaving: leavingIds.has(r.node.id), readOnly, today: vm.today })).join('')
+      : `<tr class="proj-empty" data-project-empty="${esc(g.key)}"><td colspan="8">${t('proj.empty')}</td></tr>`;
   }
   $('#rows').innerHTML = html;
-  const empty = $('#empty');
-  empty.hidden = groups.length > 0;
-  empty.textContent = t(filterActive ? 'empty.filtered' : state.view === 'history' ? 'empty.history' : 'empty.main');
+  empty.hidden = vm.groups.length > 0;
+  empty.textContent = t(state.loadError ? 'empty.loadError'
+    : vm.filterActive ? 'empty.filtered' : state.view === 'history' ? 'empty.history' : 'empty.main');
+
+  const a = document.activeElement;
+  if (fk && (!a || a === document.body || !a.isConnected)) document.querySelector(fk)?.focus({ preventScroll: true });
 }
 
 function projectRowHtml(g, open) {
   const p = g.project;
   const name = p ? p.name : t('proj.none');
-  const canAdd = state.view === 'main' && (!p || canEditProject(p));
+  const main = state.view === 'main';
+  const canAdd = main && (!p || canEditProject(p));
   const owner = isOwner(p);
   const actions = `
-    ${state.view === 'main' ? `<button class="icon" data-action="proj-up" title="${t('proj.up')}" aria-label="${t('proj.up')}">▴</button>
-    <button class="icon" data-action="proj-down" title="${t('proj.down')}" aria-label="${t('proj.down')}">▾</button>` : ''}
-    ${canAdd ? `<button class="icon" data-action="proj-add" title="${t('proj.addTask')}" aria-label="${t('proj.addTask')}">${ICON.plus}</button>` : ''}
-    ${owner ? `<button class="icon" data-action="proj-edit" title="${t('proj.edit')}" aria-label="${t('proj.edit')}">${ICON.share}</button>
-    <button class="icon danger" data-action="proj-delete" title="${t('proj.delete')}" aria-label="${t('proj.delete')}">${ICON.trash}</button>` : ''}`;
+    ${main ? `<span class="proj-move">
+      <button type="button" class="icon" data-action="proj-up" title="${t('proj.up')}" aria-label="${t('proj.up')}">▴</button>
+      <button type="button" class="icon" data-action="proj-down" title="${t('proj.down')}" aria-label="${t('proj.down')}">▾</button>
+    </span>` : ''}
+    ${canAdd ? `<button type="button" class="icon" data-action="proj-add" title="${t('proj.addTask')}" aria-label="${t('proj.addTask')}">${ICON.plus}</button>` : ''}
+    ${owner ? `<button type="button" class="icon" data-action="proj-menu" aria-haspopup="menu" aria-expanded="false" title="${t('col.actions')}" aria-label="${esc(t('menu.project', { name }))}">${ICON.more}</button>` : ''}`;
   const shared = p ? state.members.filter(m => m.project_id === p.id) : [];
   const badge = !p ? ''
     : owner ? (shared.length ? `<span class="badge share" title="${esc(shared.map(m => userEmail(m.user_id)).join(', '))}">${t('share.sharedWith', { n: shared.length })}</span>` : '')
@@ -393,8 +650,8 @@ function projectRowHtml(g, open) {
     <tr class="proj-row" data-project="${esc(g.key)}">
       <td colspan="8">
         <div class="proj-head">
-          <span class="drag-handle" title="${t('proj.drag')}" aria-hidden="true">⋮⋮</span>
-          <button class="toggle" data-action="proj-toggle" aria-expanded="${open}" aria-label="${t('action.toggle')}">${open ? '▾' : '▸'}</button>
+          ${main ? `<span class="drag-handle" title="${t('proj.drag')}" aria-hidden="true">⋮⋮</span>` : ''}
+          <button type="button" class="toggle" data-action="proj-toggle" aria-expanded="${open}" aria-label="${esc(`${t('action.toggle')}: ${name}`)}">${open ? '▾' : '▸'}</button>
           <span class="proj-name">${esc(name)}</span>
           <span class="proj-count">${g.roots.length}</span>
           ${badge}
@@ -405,16 +662,106 @@ function projectRowHtml(g, open) {
     </tr>`;
 }
 
+// ---------- menu "⋯" ----------
+// Um único menu flutuante, preenchido a cada abertura. Teclado: setas, Home/End, Enter, Esc.
+let menuCtx = null;   // { btn, items, onPick }
+
+function openMenu(btn, items, onPick) {
+  if (menuCtx?.btn === btn) { closeMenu(true); return; }   // segundo clique no mesmo botão fecha
+  closeMenu(false);
+  const el = $('#menu');
+  el.innerHTML = items.map(it => `
+    <button type="button" role="menuitem" tabindex="-1" data-item="${esc(it.id)}"${it.danger ? ' class="danger"' : ''}>${ICON[it.icon] || ''}<span>${esc(it.label)}</span></button>`).join('');
+  el.setAttribute('aria-label', btn.getAttribute('aria-label') || '');
+  el.hidden = false;
+  // abre abaixo do botão, alinhado à direita; sem espaço, abre acima
+  const r = btn.getBoundingClientRect(), m = el.getBoundingClientRect();
+  let top = r.bottom + 4;
+  if (top + m.height > window.innerHeight - 8) top = Math.max(8, r.top - m.height - 4);
+  const left = Math.max(8, Math.min(r.right - m.width, window.innerWidth - m.width - 8));
+  el.style.top = `${top}px`;
+  el.style.left = `${left}px`;
+  btn.setAttribute('aria-expanded', 'true');
+  menuCtx = { btn, items, onPick };
+  el.querySelector('[role=menuitem]')?.focus();
+}
+
+function closeMenu(returnFocus = true) {
+  const el = $('#menu');
+  if (el.hidden) return;
+  el.hidden = true;
+  el.innerHTML = '';
+  const ctx = menuCtx;
+  menuCtx = null;
+  if (ctx?.btn.isConnected) {
+    ctx.btn.setAttribute('aria-expanded', 'false');
+    if (returnFocus) ctx.btn.focus();
+  }
+  if (state.dirty) setTimeout(renderSoon, 0);   // chegou dado novo com o menu aberto
+}
+
+function bindMenu() {
+  const el = $('#menu');
+  el.addEventListener('keydown', e => {
+    const items = [...el.querySelectorAll('[role=menuitem]')];
+    const i = items.indexOf(document.activeElement);
+    let next = null;
+    switch (e.key) {
+      case 'ArrowDown': next = items[(i + 1) % items.length]; break;
+      case 'ArrowUp': next = items[(i - 1 + items.length) % items.length]; break;
+      case 'Home': next = items[0]; break;
+      case 'End': next = items[items.length - 1]; break;
+      case 'Escape': case 'Tab': e.preventDefault(); closeMenu(true); return;
+      default: return;
+    }
+    e.preventDefault();
+    next?.focus();
+  });
+  el.addEventListener('click', e => {
+    const b = e.target.closest('[data-item]');
+    if (!b || !menuCtx) return;
+    const { onPick } = menuCtx;
+    closeMenu(true);   // devolve o foco ao botão antes da ação (o pop-up volta para ele ao fechar)
+    onPick(b.dataset.item);
+  });
+  document.addEventListener('pointerdown', e => {
+    if (el.hidden || el.contains(e.target) || menuCtx?.btn.contains(e.target)) return;
+    closeMenu(false);
+  });
+  window.addEventListener('resize', () => closeMenu(false));
+  document.addEventListener('scroll', e => { if (!el.contains(e.target)) closeMenu(false); }, true);
+}
+
+function taskMenuItems(node) {
+  const items = [{ id: 'edit', icon: 'edit', label: t('action.edit') }];
+  if (!node.paused && node.status !== 'done') items.push({ id: 'pause', icon: 'stop', label: t('action.pause') });
+  if (state.view === 'main') items.push({ id: 'move', icon: 'move', label: t('action.move') });
+  items.push({ id: 'delete', icon: 'trash', label: t('action.delete'), danger: true });
+  return items;
+}
+
+const projectMenuItems = () => [
+  { id: 'proj-edit', icon: 'share', label: t('proj.edit') },
+  { id: 'proj-delete', icon: 'trash', label: t('proj.delete'), danger: true },
+];
+
 // ---------- arrastar projetos ----------
 // Pointer events (mouse, caneta e toque) em vez do arrastar nativo do HTML, que
 // falha com linhas de tabela em alguns navegadores. Durante o arraste só as
 // linhas de projeto ficam visíveis e a linha arrastada muda de lugar ao vivo.
+const calm = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// rola a página quando o ponteiro chega perto das bordas (arrastes)
+function edgeScroll(y) {
+  if (y < 60) window.scrollBy(0, -12);
+  else if (y > window.innerHeight - 60) window.scrollBy(0, 12);
+}
+
 function bindProjectDrag() {
   const rowsEl = $('#rows');
   let drag = null;   // { row, startY, active, ready, shift }
 
   const projRows = () => [...rowsEl.querySelectorAll('tr.proj-row')];
-  const calm = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const EASE = 'cubic-bezier(.2, .8, .2, 1)';
   const inView = el => { const b = el.getBoundingClientRect(); return b.bottom > 0 && b.top < window.innerHeight; };
 
@@ -438,9 +785,11 @@ function bindProjectDrag() {
   const midY = r => rowsEl.getBoundingClientRect().top + (r.offsetTop - rowsEl.offsetTop) + r.offsetHeight / 2;
 
   rowsEl.addEventListener('pointerdown', e => {
-    if (e.button !== 0 || state.editing || drag) return;
+    if (e.button !== 0 || state.editing || drag || state.view !== 'main') return;
     const row = e.target.closest('tr.proj-row');
     if (!row || e.target.closest('button, input, select, a')) return;
+    // no toque, só pela alça: tocar no resto da faixa e deslizar é rolar a página
+    if (e.pointerType === 'touch' && !e.target.closest('.drag-handle')) return;
     drag = { row, startY: e.clientY, active: false, ready: false, shift: 0 };
     if (e.target.closest('.drag-handle')) {
       e.preventDefault();   // não seleciona texto nem rola (toque)
@@ -516,9 +865,7 @@ function bindProjectDrag() {
       else others[others.length - 1].after(drag.row);
       slide(first, 480, drag.row);   // os vizinhos abrem espaço deslizando
     }
-    // rola a página perto das bordas
-    if (e.clientY < 60) window.scrollBy(0, -12);
-    else if (e.clientY > window.innerHeight - 60) window.scrollBy(0, 12);
+    edgeScroll(e.clientY);
   }, { passive: false });
 
   window.addEventListener('pointerup', () => finish(true));
@@ -547,6 +894,138 @@ async function saveProjectOrder(visibleKeys) {
   if (!changed) return;
   const { error } = await sb.rpc('save_project_order', { p_ids: ids.map(id => id === NO_PROJECT ? null : id) });
   if (error) { fail(error); await loadTasks(); }
+}
+
+// ---------- arrastar tarefas (mudar de projeto ou de tarefa mãe) ----------
+// Pela alça ⋮⋮ da linha. Soltar numa faixa de projeto = vira tarefa principal dele;
+// soltar sobre outra tarefa = vira subtarefa dela. Destinos inválidos ficam em vermelho.
+// Alternativa por teclado: "Mover para…" no menu ⋯.
+function bindTaskDrag() {
+  const rowsEl = $('#rows');
+  let drag = null;   // { node, row, startX, startY, active, ghost, hoverEl, target, err }
+
+  rowsEl.addEventListener('pointerdown', e => {
+    const handle = e.target.closest('[data-drag-task]');
+    if (!handle || e.button !== 0 || state.editing || drag) return;
+    const row = handle.closest('tr[data-id]');
+    const node = row && state.forest.byId.get(row.dataset.id);
+    if (!node) return;
+    e.preventDefault();   // não seleciona texto nem rola a página (toque)
+    drag = { node, row, startX: e.clientX, startY: e.clientY, active: false, ghost: null, hoverEl: null, target: null, err: null };
+  });
+
+  function start() {
+    drag.active = true;
+    state.editing = true;   // pausa a atualização automática enquanto arrasta
+    closeMenu(false);
+    document.body.classList.add('is-dragging-task');
+    drag.row.classList.add('drag-source');
+    const g = document.createElement('div');
+    g.className = 'drag-ghost';
+    g.setAttribute('aria-hidden', 'true');
+    g.textContent = drag.node.title;   // textContent: título do usuário não vira HTML
+    document.body.append(g);
+    drag.ghost = g;
+  }
+
+  // o que está sob o ponteiro: faixa de projeto, aviso "projeto vazio" ou linha de tarefa
+  function hit(x, y) {
+    const tr = document.elementFromPoint(x, y)?.closest('#rows tr');
+    if (!tr) return null;
+    if (tr.dataset.project) return { el: tr, target: { project: tr.dataset.project } };
+    if (tr.dataset.projectEmpty) return { el: tr, target: { project: tr.dataset.projectEmpty } };
+    const p = tr.dataset.id && state.forest.byId.get(tr.dataset.id);
+    return p ? { el: tr, target: { parent: p } } : null;
+  }
+
+  function mark(h) {
+    drag.hoverEl?.classList.remove('drop-ok', 'drop-bad');
+    drag.hoverEl = h?.el ?? null;
+    drag.err = h ? moveError(drag.node, h.target, moveCtx()) : null;
+    drag.target = h && !drag.err ? h.target : null;
+    drag.hoverEl?.classList.add(drag.err ? 'drop-bad' : 'drop-ok');
+  }
+
+  function finish(save) {
+    const d = drag;
+    drag = null;
+    if (!d?.active) return;
+    d.hoverEl?.classList.remove('drop-ok', 'drop-bad');
+    d.row.classList.remove('drag-source');
+    d.ghost?.remove();
+    document.body.classList.remove('is-dragging-task');
+    state.editing = false;
+    if (save && d.target) { performMove(d.node, d.target); return; }
+    // soltou num destino proibido (sem ser a própria linha): explica o motivo
+    if (save && d.err && d.hoverEl !== d.row && d.err !== 'move.errSame') toast(t(d.err), true);
+    if (state.dirty) render();
+  }
+
+  window.addEventListener('pointermove', e => {
+    if (!drag) return;
+    if (!drag.active) {
+      if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) < 5) return;   // ainda é um clique
+      start();
+    }
+    e.preventDefault();
+    drag.ghost.style.transform = `translate(${e.clientX + 14}px, ${e.clientY + 10}px)`;
+    mark(hit(e.clientX, e.clientY));
+    edgeScroll(e.clientY);
+  }, { passive: false });
+
+  window.addEventListener('pointerup', () => finish(true));
+  window.addEventListener('pointercancel', () => finish(false));
+  window.addEventListener('keydown', e => { if (e.key === 'Escape' && drag?.active) finish(false); });
+}
+
+// Grava a mudança de lugar. O banco confere permissões e ciclos de novo (trigger
+// prevent_task_cycle; migrações 005/007 para tirar a árvore de um projeto).
+async function performMove(node, target) {
+  const err = moveError(node, target, moveCtx());
+  if (err) { toast(t(err), true); return false; }
+  const { error } = await sb.from('tasks').update(movePatch(target)).eq('id', node.id);
+  if (error) { fail(error); return false; }
+  if (target.parent) { state.collapsed.delete(target.parent.id); state.expanded.add(target.parent.id); }
+  else if (state.collapsedProjects.delete(target.project)) savePrefs();
+  toast(t('move.done', { title: node.title }));
+  await afterChange();
+  return true;
+}
+
+// "Mover para…": escolhe o destino numa lista (alternativa ao arraste)
+async function moveDialog(node) {
+  const ctx = moveCtx();
+  const projKeys = orderedKeys(state.projects, state.projectOrder).filter(k => !moveError(node, { project: k }, ctx));
+  const groups = groupByProject(rootsFor('main', state.forest), state.projects, { order: state.projectOrder })
+    .map(g => ({ key: g.key, items: g.roots.flatMap(r => [r, ...descendants(r)]).filter(x => !moveError(node, { parent: x }, ctx)) }))
+    .filter(g => g.items.length);
+  const label = x => [...ancestors(x), x].map(a => a.title).join(' › ');
+
+  const form = projKeys.length || groups.length ? `
+    <form id="move-form" style="display:grid;gap:12px">
+      <label>${t('move.target')}
+        <select name="dest" required>
+          <option value="">${t('move.choose')}</option>
+          ${projKeys.length ? `<optgroup label="${esc(t('move.asMain'))}">${projKeys.map(k => `<option value="p:${esc(k)}">${esc(projectName(k))}</option>`).join('')}</optgroup>` : ''}
+          ${groups.map(g => `<optgroup label="${esc(t('move.inside', { project: projectName(g.key) }))}">${g.items.map(x => `<option value="t:${esc(x.id)}">${esc(label(x))}</option>`).join('')}</optgroup>`).join('')}
+        </select>
+      </label>
+      <div class="m-actions">
+        <button type="button" data-close>${t('btn.cancel')}</button>
+        <button class="primary">${t('move.submit')}</button>
+      </div>
+    </form>` : `
+    <p class="muted">${t('move.none')}</p>
+    <div class="m-actions"><button type="button" class="primary" data-close>${t('btn.ok')}</button></div>`;
+
+  const done = openDialog(t('move.title'), `${pathHtml(node)}<p><strong>${esc(node.title)}</strong></p>${form}`);
+  dlg.querySelector('#move-form')?.addEventListener('submit', guard(async e => {
+    const v = e.target.elements.dest.value;
+    const target = v.startsWith('p:') ? { project: v.slice(2) } : { parent: state.forest.byId.get(v.slice(2)) };
+    if (!target.project && !target.parent) return;
+    if (await performMove(state.forest.byId.get(node.id) ?? node, target)) dlg.close();
+  }));
+  await done;
 }
 
 // ---------- projetos ----------
@@ -580,9 +1059,8 @@ async function projectForm(project = null) {
       </div>
     </form>`);
   const form = dlg.querySelector('#proj-form');
-  form.name.focus();
   form.addEventListener('submit', guard(async () => {
-    const name = form.name.value.trim();
+    const name = form.elements.name.value.trim();
     let projectId = project?.id;
     if (project) {
       const { error } = await sb.from('projects').update({ name }).eq('id', projectId);
@@ -616,19 +1094,21 @@ async function projectForm(project = null) {
 async function deleteProject(project) {
   const n = state.forest.roots.filter(r => r.project_id === project.id).length;
   const msg = n ? t('proj.confirmDelete', { name: project.name, n }) : t('proj.confirmDeleteEmpty', { name: project.name });
-  if (!confirm(msg)) return;
+  if (!await confirmDialog({ title: t('proj.delete'), message: msg, confirmLabel: t('action.delete'), danger: true })) return;
   const { error } = await sb.rpc('delete_project', { p_id: project.id });
   if (error) return fail(error);
   const f = state.filters;
   f.main.projects = f.main.projects.filter(id => id !== project.id);
   f.history.projects = f.history.projects.filter(id => id !== project.id);
+  state.collapsedProjects.delete(project.id);
+  savePrefs();
   await loadTasks();
 }
 
 // projeto sugerido para uma tarefa nova: o do filtro, se só um estiver marcado
 function defaultProjectId() {
   const sel = state.filters.main.projects;
-  const p = sel.length === 1 && state.projects.find(x => x.id === sel[0]);
+  const p = sel.length === 1 && projectById(sel[0]);
   return p && canEditProject(p) ? p.id : null;
 }
 
@@ -642,23 +1122,25 @@ async function loadUsers({ force = false } = {}) {
 }
 
 // ---------- edição direta na tabela ----------
+// Otimista: a célula mostra o valor novo na hora; se o banco recusar, volta ao antigo.
 function startInlineEdit(cell, node, field) {
   if (field === 'assignees') { editAssignees(node); return; }   // abre janela com a lista
   const v = node[field];
   let html;
   switch (field) {
     case 'title':
-      html = `<input class="cell-edit" maxlength="300" value="${esc(v)}">`; break;
+      html = `<input class="cell-edit" maxlength="300" value="${esc(v)}" aria-label="${t('col.task')}">`; break;
     case 'notes':
-      html = `<textarea class="cell-edit" rows="2" placeholder="${t('inline.notesHint')}">${esc(v)}</textarea>`; break;
+      html = `<textarea class="cell-edit" rows="2" placeholder="${t('inline.notesHint')}" aria-label="${t('col.notes')}">${esc(v)}</textarea>`; break;
     case 'priority':
-      html = `<select class="cell-edit"><option value="no">${t('no')}</option><option value="yes" ${v ? 'selected' : ''}>${t('yes')}</option></select>`; break;
+      html = `<select class="cell-edit" aria-label="${t('col.priority')}"><option value="no">${t('no')}</option><option value="yes" ${v ? 'selected' : ''}>${t('yes')}</option></select>`; break;
     case 'due_date':
-      html = `<input class="cell-edit" type="date" value="${esc(v)}">`; break;
+      html = `<input class="cell-edit" type="date" value="${esc(v)}" aria-label="${t('col.due')}">`; break;
     case 'reminder_days':
-      html = `<input class="cell-edit" type="number" min="0" value="${esc(v)}">`; break;
+      html = `<input class="cell-edit" type="number" min="0" value="${esc(v)}" aria-label="${t('form.reminder')}">`; break;
     default: return;
   }
+  closeMenu(false);
   state.editing = true;
   cell.classList.add('editing');
   cell.innerHTML = html;
@@ -667,25 +1149,34 @@ function startInlineEdit(cell, node, field) {
   if (input.select && field !== 'due_date' && field !== 'reminder_days') input.select();
   if (field === 'priority' && input.showPicker) { try { input.showPicker(); } catch { /* ignora */ } }
 
-  let finished = false;
+  // devolve a célula ao modo de leitura sem redesenhar a tabela
+  // (assim o clique em outra célula, que causou o blur, continua valendo)
+  const show = n => { cell.classList.remove('editing'); cell.innerHTML = cellDisplay(n, field); };
+  let finished = false, byKey = false;
   const finish = async save => {
     if (finished) return;
     finished = true;
+    const cur = state.forest.byId.get(node.id) ?? node;
     const value = readInlineValue(field, input.value);
-    if (!save || value === undefined || value === (v ?? null)) {
-      state.editing = false;
-      render();
+    state.editing = false;   // libera já: o próximo clique em outra célula não é ignorado enquanto salva
+    if (!save || value === undefined || value === (cur[field] ?? null)) {
+      show(cur);
+      if (byKey) cell.focus();
+      if (state.dirty) renderSoon();
       return;
     }
-    state.editing = false;   // libera já: o próximo clique em outra célula não é ignorado enquanto salva
+    const prev = patchTask(node.id, { [field]: value });
+    show(state.forest.byId.get(node.id) ?? cur);
+    if (byKey) cell.focus();
     const { error } = await sb.from('tasks').update({ [field]: value }).eq('id', node.id);
-    if (error) { fail(error); render(); return; }
-    await afterChange();
+    if (error) { patchTask(node.id, prev); fail(error); renderSoon(); return; }
+    if (field === 'due_date' && value && value < todayISO() && cur.status !== 'done') toast(t('form.pastDueSaved'));
+    await afterChange();   // reconcilia com o banco (status da mãe, atraso etc.)
   };
 
   input.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-    else if (e.key === 'Enter' && !(field === 'notes' && e.shiftKey)) { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); byKey = true; finish(false); }
+    else if (e.key === 'Enter' && !(field === 'notes' && e.shiftKey)) { e.preventDefault(); byKey = true; finish(true); }
   });
   input.addEventListener('blur', () => finish(true));
   if (field === 'priority') input.addEventListener('change', () => finish(true));
@@ -727,8 +1218,8 @@ function assigneeField(name, list = []) {
   const sel = new Set((list || []).map(s => s.toLowerCase()));
   return `
     <div class="assignee-field" data-assignees>
-      <span>${t('form.assignee')}</span>
-      <input name="${name}" autocomplete="off" maxlength="2000" value="${esc(fmtAssignees(list))}" placeholder="${t('form.assigneeHint')}">
+      <label for="as-${name}">${t('form.assignee')}</label>
+      <input id="as-${name}" name="${name}" autocomplete="off" maxlength="2000" value="${esc(fmtAssignees(list))}" placeholder="${t('form.assigneeHint')}">
       <details class="multi">
         <summary></summary>
         <div class="multi-panel">
@@ -778,7 +1269,7 @@ async function editAssignees(node) {
   bindAssigneeField(dlg);
   dlg.querySelector('#who-form').addEventListener('submit', guard(async e => {
     const { error } = await sb.from('tasks')
-      .update({ assignees: parseAssignees(e.target.assignees.value) }).eq('id', node.id);
+      .update({ assignees: parseAssignees(e.target.elements.assignees.value) }).eq('id', node.id);
     if (error) return fail(error);
     changed = true;
     dlg.close();
@@ -811,8 +1302,9 @@ async function taskForm({ task = null, parentId = null, projectId = null }) {
       ${projectField}
       <label>${t('form.notes')}<textarea name="notes">${esc(v.notes)}</textarea></label>
       <div class="grid2">
-        <label>${t('form.due')}<input type="date" name="due_date" value="${esc(v.due_date)}"></label>
+        <label>${t('form.due')}<input type="date" name="due_date" value="${esc(v.due_date)}" aria-describedby="due-warn"></label>
         <label>${t('form.reminder')}<input type="number" name="reminder_days" min="0" value="${esc(v.reminder_days)}"></label>
+        <p class="warn" id="due-warn" aria-live="polite"></p>
         <label class="chk"><input type="checkbox" name="priority" ${v.priority ? 'checked' : ''}> ${t('form.priority')}</label>
         ${assigneeField('assignees', task ? v.assignees : state.users.filter(u => u.id === state.userId).map(u => u.email))}
       </div>
@@ -822,8 +1314,18 @@ async function taskForm({ task = null, parentId = null, projectId = null }) {
       </div>
     </form>`);
   bindAssigneeField(dlg);
+  const form = dlg.querySelector('#task-form');
 
-  dlg.querySelector('#task-form').addEventListener('submit', guard(async e => {
+  // prazo no passado: avisa (sem impedir) que a tarefa já vai nascer "Atrasado"
+  const warn = form.querySelector('#due-warn');
+  const checkDue = () => {
+    const d = form.elements.due_date.value;
+    warn.textContent = d && d < todayISO() && d !== (v.due_date || '') && v.status !== 'done' ? t('form.pastDue') : '';
+  };
+  form.elements.due_date.addEventListener('input', checkDue);
+  form.elements.due_date.addEventListener('change', checkDue);
+
+  form.addEventListener('submit', guard(async e => {
     const fd = new FormData(e.target);
     const payload = {
       title: fd.get('title').trim(),
@@ -846,9 +1348,27 @@ async function taskForm({ task = null, parentId = null, projectId = null }) {
 }
 
 // ---------- ações da linha ----------
+// Otimista: o select muda na hora; se o banco recusar, volta e mostra o erro.
+// Depois do sucesso recarrega para pegar o que o banco recalculou (mãe, atraso, conclusão).
 async function changeStatus(node, status) {
-  const { error } = await sb.from('tasks').update({ status }).eq('id', node.id);
-  if (error) { fail(error); render(); return; }   // render desfaz o select
+  const id = node.id;
+  const prev = patchTask(id, { status });
+  if (!prev) return;
+  // raiz concluída: continua visível (sumindo) até o anúncio de "foi para o Histórico"
+  const finishingRoot = !node.parent && status === 'done' && state.view === 'main';
+  if (finishingRoot) {
+    state.leaving.add(id);
+    setTimeout(() => { state.leaving.delete(id); renderSoon(); }, LEAVE_MS + 1000);
+  }
+  render();
+  const { error } = await sb.from('tasks').update({ status }).eq('id', id);
+  if (error) {
+    if (finishingRoot) state.leaving.delete(id);
+    patchTask(id, prev);
+    fail(error);
+    renderSoon();
+    return;
+  }
   await afterChange();
 }
 
@@ -857,7 +1377,7 @@ async function deleteTask(node) {
   const msg = n
     ? t('delete.withChildren', { title: node.title, n })
     : t('delete.single', { title: node.title });
-  if (!confirm(msg)) return;
+  if (!await confirmDialog({ title: t('delete.title'), message: msg, confirmLabel: t('action.delete'), danger: true })) return;
   const { error } = await sb.from('tasks').delete().eq('id', node.id);
   if (error) return fail(error);
   await afterChange();
@@ -880,6 +1400,26 @@ async function pauseTask(node) {
   await afterChange();
 }
 
+async function rowAction(action, id) {
+  const node = state.forest.byId.get(id);
+  if (!node) return;
+  switch (action) {
+    case 'add': await taskForm({ parentId: node.id }); await afterChange(); break;
+    case 'edit': await taskForm({ task: node }); await afterChange(); break;
+    case 'delete': await deleteTask(node); break;
+    case 'pause': await pauseTask(node); break;
+    case 'resume': await resumeTask(node); break;
+    case 'move': await moveDialog(node); break;
+  }
+}
+
+async function projectAction(action, key) {
+  const project = projectById(key);
+  if (!project) return;
+  if (action === 'proj-edit') await projectForm(project);
+  else if (action === 'proj-delete') await deleteProject(project);
+}
+
 // ---------- regra 11: retomada ----------
 async function resumeTask(node) {
   const today = todayISO();
@@ -891,14 +1431,14 @@ async function resumeTask(node) {
   const rows = list.map(x => {
     const expired = x.due_date && x.due_date < today && x.status !== 'done';
     return `
-      <tr data-id="${x.id}">
+      <tr data-id="${esc(x.id)}">
         <td style="padding-left:${(x.depth - node.depth) * 16 + 6}px">
           ${esc(x.title)}
           ${expired ? `<span class="flag">${t('resume.expired')}</span>` : ''}
           ${x.status === 'in_progress' ? `<span class="flag info">${t('resume.wasInProgress')}</span>` : ''}
         </td>
-        <td><input type="date" name="due" value="${esc(x.due_date)}" data-orig="${esc(x.due_date)}"></td>
-        <td><select name="status" data-orig="${x.status}">${statusOpts(x.status)}</select></td>
+        <td><input type="date" name="due" value="${esc(x.due_date)}" data-orig="${esc(x.due_date)}" aria-label="${esc(`${t('col.due')}: ${x.title}`)}"></td>
+        <td><select name="status" data-orig="${esc(x.status)}" aria-label="${esc(`${t('col.status')}: ${x.title}`)}">${statusOpts(x.status)}</select></td>
       </tr>`;
   }).join('');
 
@@ -938,19 +1478,147 @@ async function resumeTask(node) {
   await afterChange();
 }
 
+// ---------- pendências (atraso, inatividade, lembrete) ----------
+// refresh_automations devolve só o que o usuário pode editar. Em vez de abrir os pop-ups
+// em fila, ficam num painel (sino no topo); cada um é aberto quando a pessoa escolher.
+function setPending(data) {
+  const list = k => Array.isArray(data?.[k]) ? data[k] : [];
+  state.pending = { overdue: list('overdue'), inactivity: list('inactivity'), reminders: list('reminders') };
+  renderPendingButton();
+  if (drawer.open) renderDrawer();
+}
+
+// Pendências ainda válidas pela lista local (some na hora o que foi resolvido por outro caminho,
+// por exemplo um prazo prorrogado direto na tabela). A verificação periódica reconcilia o resto.
+function pendingItems() {
+  const snoozed = snoozedToday();
+  const get = id => state.forest.byId.get(id);
+  const out = [];
+  for (const p of state.pending.overdue) {
+    const node = get(p.task_id);
+    if (!node || node.paused || node.status !== 'overdue' || node.due_date !== p.expired_due_date) continue;
+    out.push({ key: `o:${p.event_id}`, kind: 'overdue', node, p, snoozed: snoozed.has(p.event_id) });
+  }
+  for (const p of state.pending.inactivity) {
+    const node = get(p.task_id);
+    if (!node || node.paused || node.status !== 'in_progress') continue;
+    out.push({ key: `i:${p.task_id}`, kind: 'inactivity', node, p, snoozed: false });
+  }
+  for (const p of state.pending.reminders) {
+    const node = get(p.task_id);
+    if (!node || node.paused || node.status === 'done' || node.due_date !== p.due_date) continue;
+    out.push({ key: `r:${p.task_id}:${p.due_date}`, kind: 'reminder', node, p, snoozed: false });
+  }
+  return out.sort((a, b) => a.snoozed - b.snoozed);   // adiados ("Lembrar amanhã") por último
+}
+
+function renderPendingButton() {
+  const n = pendingItems().filter(i => !i.snoozed).length;
+  const b = $('#pending-btn');
+  const label = t('pending.label', { n });
+  b.setAttribute('aria-label', label);
+  b.title = label;
+  b.classList.toggle('has-pending', n > 0);
+  const c = b.querySelector('.bell-count');
+  c.textContent = n > 99 ? '99+' : String(n);
+  c.hidden = n === 0;
+}
+
+// Um toast só, e só quando aparece pendência que ainda não foi avisada
+function notifyPending() {
+  const items = pendingItems().filter(i => !i.snoozed);
+  const fresh = items.some(i => !state.notified.has(i.key));
+  state.notified = new Set(items.map(i => i.key));
+  if (!items.length || !fresh) return;
+  toast(items.length === 1 ? t('pending.toastOne') : t('pending.toastMany', { n: items.length }), false,
+    { label: t('pending.view'), onClick: openPending });
+}
+
+function pendingItemHtml(i) {
+  const { node, p } = i;
+  const text = i.kind === 'overdue' ? t('pending.overdueText', { date: fmtDate(p.expired_due_date) })
+    : i.kind === 'inactivity' ? t('pending.inactText')
+    : t('pending.remText', { when: fmtRelative(Number(p.days_left)), date: fmtDate(p.due_date) });
+  const label = t(i.kind === 'reminder' ? 'pending.view' : 'pending.resolve');
+  return `
+    <li class="pending-item kind-${i.kind}${i.snoozed ? ' snoozed' : ''}">
+      <div class="pi-text">
+        <span class="pi-kind">${t('pending.kind.' + i.kind)}</span>
+        ${pathHtml(node)}
+        <strong>${esc(node.title)}</strong>
+        <span class="muted small">${esc(text)}${i.snoozed ? ` · ${t('pending.snoozed')}` : ''}</span>
+      </div>
+      <button type="button" data-resolve="${esc(i.key)}" aria-label="${esc(`${label}: ${node.title}`)}">${label}</button>
+    </li>`;
+}
+
+function renderDrawer() {
+  const focused = document.activeElement?.closest?.('#drawer [data-resolve]')?.dataset.resolve;
+  const items = pendingItems();
+  drawer.innerHTML = `
+    <div class="m-head">
+      <h2 id="drawer-title">${t('pending.title')}</h2>
+      <button type="button" class="icon" data-close aria-label="${t('action.close')}">✕</button>
+    </div>
+    <div class="drawer-body">
+      ${items.length
+        ? `<p class="muted small">${t('pending.hint')}</p><ul class="pending-list">${items.map(pendingItemHtml).join('')}</ul>`
+        : `<p class="muted">${t('pending.empty')}</p>`}
+    </div>`;
+  if (focused) drawer.querySelector(`[data-resolve="${CSS.escape(focused)}"]`)?.focus();
+}
+
+function openPending() {
+  closeMenu(false);
+  if (dlg.open || resolving) return;   // um pop-up por vez
+  renderDrawer();
+  if (!drawer.open) drawer.showModal();
+  (drawer.querySelector('[data-resolve]') || drawer.querySelector('[data-close]'))?.focus();
+}
+
+// Abre o pop-up da pendência escolhida; ao fechar, volta para a lista (se ainda houver itens)
+let resolving = false;
+async function resolvePending(key) {
+  if (resolving) return;
+  const item = pendingItems().find(i => i.key === key);
+  if (!item) return;
+  resolving = true;
+  drawer.close();
+  let result = false;
+  try {
+    if (item.kind === 'overdue') result = await overduePopup(item.p);
+    else if (item.kind === 'inactivity') result = await inactivityPopup(item.p.task_id);
+    else result = await reminderPopup(item.p);
+  } finally {
+    resolving = false;
+  }
+  if (result === 'done') dropPending(item);
+  renderPendingButton();
+  if (pendingItems().length && state.userId) openPending();
+}
+
+function dropPending(item) {
+  const P = state.pending;
+  if (item.kind === 'overdue') P.overdue = P.overdue.filter(p => p.event_id !== item.p.event_id);
+  else if (item.kind === 'inactivity') P.inactivity = P.inactivity.filter(p => p.task_id !== item.p.task_id);
+  else P.reminders = P.reminders.filter(p => p !== item.p);
+}
+
 // ---------- regra 9: pop-up de atraso ----------
+// Devolve 'done' (resolvido), 'snoozed' (lembrar amanhã) ou false (fechado sem resolver).
 async function overduePopup(p) {
   const node = state.forest.byId.get(p.task_id);
-  if (!node) return;
+  if (!node) return false;
   const today = todayISO();
+  let result = false;
 
   const done = openDialog(t('overdue.title'), `
     ${pathHtml(node)}
     <p>${t('overdue.text', { title: esc(node.title), date: fmtDate(p.expired_due_date) })}</p>
     <p class="muted">${t('overdue.choose')}</p>
     <div class="choice">
-      <button type="button" data-mode="extend">${t('overdue.extend')}</button>
-      <button type="button" data-mode="plan">${t('overdue.plan')}</button>
+      <button type="button" data-mode="extend" aria-pressed="false">${t('overdue.extend')}</button>
+      <button type="button" data-mode="plan" aria-pressed="false">${t('overdue.plan')}</button>
     </div>
     <form class="pane" data-pane="extend" hidden>
       <label>${t('overdue.newDue')}<input type="date" name="due" required min="${today}"></label>
@@ -966,32 +1634,39 @@ async function overduePopup(p) {
       <p class="muted">${t('overdue.planHint')}</p>
       <div class="m-actions"><button class="primary">${t('overdue.planSubmit')}</button></div>
     </form>
-    <div class="m-actions"><button type="button" data-snooze>${t('overdue.snooze')}</button></div>`, { mandatory: true });
+    <div class="m-actions"><button type="button" data-snooze>${t('overdue.snooze')}</button></div>`);
   bindAssigneeField(dlg);
 
   dlg.querySelector('[data-snooze]').addEventListener('click', () => {
     snoozeOverdue(p.event_id);
+    result = 'snoozed';
     dlg.close();
   });
 
   dlg.querySelectorAll('[data-mode]').forEach(btn => btn.addEventListener('click', () => {
-    dlg.querySelectorAll('[data-mode]').forEach(b => b.classList.toggle('selected', b === btn));
+    dlg.querySelectorAll('[data-mode]').forEach(b => {
+      b.classList.toggle('selected', b === btn);
+      b.setAttribute('aria-pressed', String(b === btn));
+    });
     dlg.querySelectorAll('[data-pane]').forEach(p => { p.hidden = p.dataset.pane !== btn.dataset.mode; });
+    focusFirstField(dlg.querySelector(`[data-pane="${btn.dataset.mode}"]`));
   }));
 
   dlg.querySelector('[data-pane=extend]').addEventListener('submit', guard(async e => {
-    const { error } = await sb.rpc('extend_due_date', { p_task: node.id, p_new_due: e.target.due.value });
+    const { error } = await sb.rpc('extend_due_date', { p_task: node.id, p_new_due: e.target.elements.due.value });
     if (error) return fail(error);
+    result = 'done';
     dlg.close();
   }));
 
   dlg.querySelector('[data-pane=plan]').addEventListener('submit', guard(async e => {
-    const f = e.target;
+    const f = e.target.elements;
     const { data: planId, error } = await sb.rpc('create_action_plan', {
       p_parent: node.id, p_title: f.plan_title.value.trim(), p_due: f.due.value,
       p_assignees: parseAssignees(f.assignee.value),
     });
     if (error) return fail(error);
+    result = 'done';   // o plano já existe: mesmo que o lembrete falhe, o atraso está resolvido
     if (f.reminder_days.value !== '') {
       const { error: e2 } = await sb.from('tasks')
         .update({ reminder_days: Number(f.reminder_days.value) }).eq('id', planId);
@@ -1003,14 +1678,16 @@ async function overduePopup(p) {
 
   await done;
   await loadTasks();
+  return result;
 }
 
 // ---------- regra 10: pop-up de inatividade ----------
 async function inactivityPopup(taskId) {
   const node = state.forest.byId.get(taskId);
-  if (!node) return;
+  if (!node) return false;
   const today = todayISO();
   const desc = descendants(node);
+  let result = false;
 
   const descHtml = desc.length ? `
     <table class="mini">
@@ -1034,7 +1711,7 @@ async function inactivityPopup(taskId) {
         ${radio('waiting_others')}
         ${radio('stopped')}
         ${radio('other')}
-        <label id="reason-label">${t('inact.reason')}<textarea name="reason"></textarea></label>
+        <label id="reason-label"><span>${t('inact.reason')}</span><textarea name="reason"></textarea></label>
       </fieldset>
       <fieldset>
         <legend>${t('inact.optional')}</legend>
@@ -1043,46 +1720,49 @@ async function inactivityPopup(taskId) {
         <label>${t('inact.planDue')}<input type="date" name="plan_due" min="${today}"></label>
       </fieldset>
       <div class="m-actions"><button class="primary">${t('btn.confirm')}</button></div>
-    </form>`, { mandatory: true });
+    </form>`);
 
   const form = dlg.querySelector('#inact-form');
+  const el = form.elements;
   form.addEventListener('change', () => {
-    const sit = form.sit.value;
-    form.reason.required = sit === 'other';
-    dlg.querySelector('#reason-label').firstChild.textContent =
+    const sit = el.sit.value;
+    el.reason.required = sit === 'other';
+    dlg.querySelector('#reason-label > span').textContent =
       t(sit === 'other' ? 'inact.reasonOther' : sit === 'waiting_others' ? 'inact.reasonWaiting' : 'inact.reason');
-    form.plan_due.required = form.plan_title.value.trim() !== '';
+    el.plan_due.required = el.plan_title.value.trim() !== '';
   });
-  form.plan_title.addEventListener('input', () => { form.plan_due.required = form.plan_title.value.trim() !== ''; });
+  el.plan_title.addEventListener('input', () => { el.plan_due.required = el.plan_title.value.trim() !== ''; });
 
   form.addEventListener('submit', guard(async () => {
-    if (form.due.value !== (node.due_date || '')) {
-      const { error } = await sb.from('tasks').update({ due_date: form.due.value || null }).eq('id', node.id);
+    if (el.due.value !== (node.due_date || '')) {
+      const { error } = await sb.from('tasks').update({ due_date: el.due.value || null }).eq('id', node.id);
       if (error) return fail(error);
-      node.due_date = form.due.value || null;   // evita repetir se outra etapa falhar
+      node.due_date = el.due.value || null;   // evita repetir se outra etapa falhar
     }
-    if (form.plan_title.value.trim()) {
+    if (el.plan_title.value.trim()) {
       const { error } = await sb.rpc('create_action_plan', {
-        p_parent: node.id, p_title: form.plan_title.value.trim(), p_due: form.plan_due.value,
+        p_parent: node.id, p_title: el.plan_title.value.trim(), p_due: el.plan_due.value,
       });
       if (error) return fail(error);
-      form.plan_title.value = '';
+      el.plan_title.value = '';
     }
     const { error } = await sb.rpc('set_situation', {
-      p_task: node.id, p_situation: form.sit.value, p_reason: form.reason.value, p_from_prompt: true,
+      p_task: node.id, p_situation: el.sit.value, p_reason: el.reason.value, p_from_prompt: true,
     });
     if (error) return fail(error);
+    result = 'done';
     dlg.close();
   }));
 
   await done;
   await loadTasks();
+  return result;
 }
 
 // ---------- regra 12: lembrete ----------
 async function reminderPopup(p) {
   const node = state.forest.byId.get(p.task_id);
-  if (!node) return;
+  if (!node) return false;
   const when = p.days_left === 0 ? t('rem.today')
     : p.days_left === 1 ? t('rem.tomorrow')
     : t('rem.inDays', { n: p.days_left });
@@ -1094,7 +1774,37 @@ async function reminderPopup(p) {
     <div class="m-actions"><button class="primary" data-close>${t('btn.ok')}</button></div>`);
   await done;   // fechar de qualquer jeito conta como "exibido"
   const { error } = await sb.rpc('ack_reminder', { p_task: node.id });
-  if (error) fail(error);
+  if (error) { fail(error); return false; }
+  return 'done';
+}
+
+// ---------- exportar e imprimir ----------
+// CSV da visão atual: mesmos filtros e mesma ordem da tela, com tudo expandido.
+function exportCsv() {
+  const vm = viewModel();
+  const lines = [[
+    t('csv.project'), t('csv.path'), t('col.task'), t('col.notes'), t('col.priority'), t('col.due'),
+    t('col.reminder'), t('col.assignee'), t('col.status'), t('csv.situation'),
+  ]];
+  for (const g of vm.groups) {
+    const rows = flatten(g.roots, { filterActive: vm.rowFilterActive, visible: vm.visible, collapsed: new Set(), expanded: state.expanded, compare: vm.compare });
+    for (const { node: n } of rows) {
+      lines.push([
+        projectName(g.key), ancestors(n).map(a => a.title).join(' › '), n.title, n.notes ?? '',
+        t(n.priority ? 'yes' : 'no'), n.due_date ? fmtDate(n.due_date) : '', n.reminder_days ?? '',
+        fmtAssignees(n.assignees), statusText(n.status), n.blocking_status ? t('situation.' + n.blocking_status) : '',
+      ]);
+    }
+  }
+  // Blob local + <a download>: nada sai do navegador
+  const url = URL.createObjectURL(new Blob([toCSV(lines)], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `cajuca-${state.view === 'history' ? 'historico' : 'tarefas'}-${todayISO()}.csv`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // ---------- login ----------
@@ -1103,6 +1813,11 @@ function showLoginError(key) {
   err.dataset.key = key ?? '';
   err.hidden = !key;
   if (key) err.textContent = t(key);
+}
+
+function setPasswordVisible(show) {
+  $('#pw-toggle').setAttribute('aria-pressed', String(show));
+  $('#login-pw').type = show ? 'text' : 'password';
 }
 
 // Aberta pelo link do e-mail "esqueci minha senha" (evento PASSWORD_RECOVERY)
@@ -1116,7 +1831,7 @@ async function passwordDialog() {
       </div>
     </form>`);
   dlg.querySelector('#pw-form').addEventListener('submit', guard(async e => {
-    const { error } = await sb.auth.updateUser({ password: e.target.pw.value });
+    const { error } = await sb.auth.updateUser({ password: e.target.elements.pw.value });
     if (error) return fail(error);
     dlg.close();
     toast(t('pw.done'));
@@ -1128,18 +1843,82 @@ async function passwordDialog() {
 function bindUi() {
   document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => switchView(tab.dataset.view)));
 
-  const setFilter = (key, value) => { state.filters[state.view][key] = value; state.expanded.clear(); render(); };
+  const setFilter = (key, value) => {
+    state.filters[state.view][key] = value;
+    state.expanded.clear();
+    savePrefs();
+    render();
+  };
   $('#f-priority').addEventListener('change', e => setFilter('priority', e.target.value));
   $('#f-period').addEventListener('change', e => setFilter('period', e.target.value));
   $('#f-assignee').addEventListener('change', e => setFilter('assignee', e.target.value));
+
+  // busca: espera a pessoa parar de digitar; Esc limpa
+  let qTimer;
+  $('#f-q').addEventListener('input', e => {
+    clearTimeout(qTimer);
+    qTimer = setTimeout(() => setFilter('q', e.target.value.slice(0, 200)), 250);
+  });
+  $('#f-q').addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || !e.target.value) return;
+    e.preventDefault();
+    e.target.value = '';
+    clearTimeout(qTimer);
+    setFilter('q', '');
+  });
+
   $('#f-clear').addEventListener('click', () => {
-    state.filters[state.view] = { ...DEFAULT_FILTERS };
+    clearTimeout(qTimer);
+    state.filters[state.view] = freshFilters();
+    $('#f-q').value = '';
     state.expanded.clear();
+    savePrefs();
+    render();
+    if (!window.matchMedia('(pointer: coarse)').matches) $('#f-q').focus();   // o botão sumiu: o foco vai para a busca
+  });
+
+  // atalhos: "Minhas tarefas" liga/desliga; os de prazo/status são exclusivos entre si
+  const toggleQuick = k => setFilter('quick', state.filters[state.view].quick === k ? '' : k);
+  $('#chips').addEventListener('click', e => {
+    const b = e.target.closest('[data-chip]');
+    if (!b) return;
+    if (b.dataset.chip === 'mine') setFilter('mine', !state.filters[state.view].mine);
+    else toggleQuick(b.dataset.chip);
+  });
+  $('#summary').addEventListener('click', e => {
+    const b = e.target.closest('[data-quick]');
+    if (b) toggleQuick(b.dataset.quick);
+  });
+
+  // celular: a barra de filtros abre e fecha
+  $('#f-toggle').addEventListener('click', () => {
+    const open = !$('#toolbar').classList.contains('open');
+    $('#toolbar').classList.toggle('open', open);
+    $('#f-toggle').setAttribute('aria-expanded', String(open));
+  });
+
+  $('#head').addEventListener('click', e => {
+    const b = e.target.closest('[data-sort]');
+    if (!b) return;
+    state.sort[state.view] = nextSort(state.sort[state.view], b.dataset.sort);
+    savePrefs();
     render();
   });
 
   $('#new-task').addEventListener('click', async () => { await taskForm({ projectId: defaultProjectId() }); await afterChange(); });
   $('#new-project').addEventListener('click', () => projectForm());
+  $('#export-csv').addEventListener('click', exportCsv);
+  $('#print').addEventListener('click', () => window.print());
+  // impressão: tudo expandido (projetos e tarefas), respeitando os filtros
+  window.addEventListener('beforeprint', () => { state.printing = true; render(); });
+  window.addEventListener('afterprint', () => { state.printing = false; render(); });
+
+  $('#pending-btn').addEventListener('click', openPending);
+  drawer.addEventListener('click', e => {
+    if (e.target === drawer || e.target.closest('[data-close]')) { drawer.close(); return; }   // fundo ou ✕
+    const b = e.target.closest('[data-resolve]');
+    if (b) resolvePending(b.dataset.resolve);
+  });
 
   const projBox = $('#f-projects');
   projBox.addEventListener('change', e => {
@@ -1152,7 +1931,9 @@ function bindUi() {
   });
   document.addEventListener('click', e => { if (!projBox.contains(e.target)) projBox.open = false; });
 
+  bindMenu();
   bindProjectDrag();
+  bindTaskDrag();
 
   $('#rows').addEventListener('click', async e => {
     const btn = e.target.closest('button[data-action]');
@@ -1167,31 +1948,29 @@ function bindUi() {
     const projRow = btn.closest('tr.proj-row');
     if (projRow) {
       const key = projRow.dataset.project;
-      const project = state.projects.find(p => p.id === key);
       switch (btn.dataset.action) {
         case 'proj-toggle':
           if (state.collapsedProjects.has(key)) state.collapsedProjects.delete(key);
           else state.collapsedProjects.add(key);
+          savePrefs();
           render();
           break;
         case 'proj-up': case 'proj-down': moveProject(key, btn.dataset.action === 'proj-up' ? -1 : 1); break;
-        case 'proj-add': await taskForm({ projectId: project?.id ?? null }); await afterChange(); break;
-        case 'proj-edit': if (project) await projectForm(project); break;
-        case 'proj-delete': if (project) await deleteProject(project); break;
+        case 'proj-add': await taskForm({ projectId: projectById(key)?.id ?? null }); await afterChange(); break;
+        case 'proj-menu': openMenu(btn, projectMenuItems(), a => projectAction(a, key)); break;
       }
       return;
     }
-    const node = state.forest.byId.get(btn.closest('tr').dataset.id);
+    const id = btn.closest('tr')?.dataset.id;
+    const node = id && state.forest.byId.get(id);
+    if (!node) return;
     switch (btn.dataset.action) {
       case 'toggle':
         toggleNode(node.id, btn.dataset.all === 'true', state.collapsed, state.expanded);
         render();
         break;
-      case 'add': await taskForm({ parentId: node.id }); await afterChange(); break;
-      case 'edit': await taskForm({ task: node }); await afterChange(); break;
-      case 'delete': await deleteTask(node); break;
-      case 'pause': await pauseTask(node); break;
-      case 'resume': await resumeTask(node); break;
+      case 'menu': openMenu(btn, taskMenuItems(node), a => rowAction(a, id)); break;
+      default: await rowAction(btn.dataset.action, id);
     }
   });
 
@@ -1206,19 +1985,27 @@ function bindUi() {
   $('#rows').addEventListener('change', e => {
     if (e.target.dataset.action !== 'status') return;
     const node = state.forest.byId.get(e.target.closest('tr').dataset.id);
-    changeStatus(node, e.target.value);
+    if (node) changeStatus(node, e.target.value);
+  });
+
+  $('#pw-toggle').addEventListener('click', () => {
+    setPasswordVisible($('#pw-toggle').getAttribute('aria-pressed') !== 'true');
+    $('#login-pw').focus();
   });
 
   $('#login-form').addEventListener('submit', guard(async e => {
-    const fd = new FormData(e.target);
+    const form = e.target;
+    const fd = new FormData(form);
     $('#login-info').hidden = true;
+    setPasswordVisible(false);   // não deixa a senha à mostra (nem para o gerenciador de senhas)
     const { error } = await sb.auth.signInWithPassword({ email: fd.get('email'), password: fd.get('password') });
     showLoginError(error ? 'login.error' : null);
+    if (!error) form.elements.password.value = '';   // não deixa a senha no campo escondido
   }));
 
   // Sempre a mesma resposta, exista o e-mail ou não (não revela quem tem conta)
   $('#forgot').addEventListener('click', async () => {
-    const email = $('#login-form').email.value.trim();
+    const email = $('#login-form').elements.email.value.trim();
     $('#login-info').hidden = true;
     if (!email) { showLoginError('login.needEmail'); return; }
     showLoginError(null);
@@ -1268,25 +2055,48 @@ function applyLanguage() {
   });
   const err = $('#login-error');
   if (!err.hidden) err.textContent = t(err.dataset.key || 'login.error');
+  buildShortcuts();
   render();
+  if (drawer.open) renderDrawer();
 }
 
 // ---------- sessão ----------
 let refreshTimer;
 async function onSession(session) {
-  if (dlg.open) dlg.close();   // sessão caiu com um pop-up aberto: não deixa dados à vista sobre a tela de login
+  // sessão caiu com um pop-up aberto: não deixa dados à vista sobre a tela de login
+  if (dlg.open) dlg.close();
+  if (drawer.open) drawer.close();
+  closeMenu(false);
   $('#login').hidden = !!session;
   $('#app').hidden = !session;
   clearInterval(refreshTimer);
   // outro usuário: começa do zero (não mistura dados nem avisos)
   state.forest = { byId: new Map(), roots: [] };
   state.projects = []; state.projectOrder = []; state.members = []; state.users = [];
-  state.filters = { main: { ...DEFAULT_FILTERS }, history: { ...DEFAULT_FILTERS } };
+  state.pending = emptyPending();
+  state.notified = new Set();
+  state.openRoots = new Set();
+  state.leaving.clear(); state.collapsed.clear(); state.expanded.clear();
+  state.editing = false; state.dirty = false; state.loadError = false;
   state.userId = session?.user?.id ?? null;
-  if (!session) return;
+  state.me = session?.user?.email ?? '';
+  if (session) loadPrefs();
+  else {
+    state.filters = { main: freshFilters(), history: freshFilters() };
+    state.sort = { main: null, history: null };
+    state.collapsedProjects = new Set();
+  }
+  state.loading = !!session;
+  render();
+  if (!session) {
+    setPasswordVisible(false);
+    $('#login-form').elements.email.focus();
+    return;
+  }
   $('#user-email').textContent = session.user.email;
   await loadUsers({ force: true });
   await runAutomations();
+  if (state.loading && state.userId === session.user.id) await loadTasks();   // a verificação não chegou a carregar
   refreshTimer = setInterval(runAutomations, REFRESH_MINUTES * 60 * 1000);
 }
 
@@ -1300,7 +2110,7 @@ sb.auth.onAuthStateChange((event, session) => {
   const changed = id !== lastUserId;
   lastUserId = id;
   setTimeout(async () => {   // fora do callback, como recomenda o supabase-js
-    if (recovering) await passwordDialog();   // antes dos avisos automáticos, que esperam o pop-up fechar
+    if (recovering) await passwordDialog();   // antes da verificação de pendências, que espera o pop-up fechar
     if (changed) await onSession(session);
   }, 0);
 });

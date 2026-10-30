@@ -3,9 +3,12 @@
 -- Rodar inteiro no SQL Editor do Supabase, uma única vez.
 --
 -- ATENÇÃO: este arquivo é só a BASE. Depois dele, rode em ordem as migrations:
---   migrations/001 ... 005 (projetos, vários responsáveis, ordem dos projetos, correções).
+--   migrations/001 ... 007 (projetos, vários responsáveis, ordem dos projetos, correções,
+--   avisos por usuário, mover tarefas).
 -- Várias funções e políticas abaixo são substituídas por elas (por exemplo, a política
--- "tasks_authenticated_all" e a coluna assignee_email deixam de existir).
+-- "tasks_authenticated_all" e a coluna assignee_email deixam de existir; depois da 006,
+-- reminder_shown_* e last_inactivity_prompt_at de tasks ficam sem uso — o estado de cada
+-- usuário vai para task_user_state).
 -- Em instalação nova, desative também o cadastro público (Authentication > Sign In / Providers).
 --
 -- Arquitetura: front estático (GitHub Pages) -> Supabase direto.

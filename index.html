@@ -36,7 +36,12 @@
       </div>
       <p class="muted" data-i18n="app.subtitle"></p>
       <label><span data-i18n="login.email"></span><input type="email" name="email" required autocomplete="username"></label>
-      <label><span data-i18n="login.password"></span><input type="password" name="password" required autocomplete="current-password"></label>
+      <label><span data-i18n="login.password"></span>
+        <span class="pw-wrap">
+          <input type="password" name="password" id="login-pw" required autocomplete="current-password">
+          <button type="button" id="pw-toggle" class="icon pw-toggle" aria-pressed="false" aria-controls="login-pw" data-i18n-aria="login.showPassword" data-i18n-title="login.showPassword"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        </span>
+      </label>
       <button class="primary" data-i18n="login.submit"></button>
       <p id="login-error" class="error" role="alert" hidden></p>
       <button type="button" id="forgot" class="ghost" data-i18n="login.forgot"></button>
@@ -49,10 +54,14 @@
     <header class="topbar">
       <h1><img class="logo logo-light" src="assets/logo.png" alt="Cajuca"><img class="logo logo-dark" src="assets/logo-dark.png" alt="Cajuca"></h1>
       <nav class="tabs">
-        <button data-view="main" class="tab active" data-i18n="top.tasks"></button>
-        <button data-view="history" class="tab" data-i18n="top.history"></button>
+        <button type="button" data-view="main" class="tab active" aria-pressed="true" data-i18n="top.tasks"></button>
+        <button type="button" data-view="history" class="tab" aria-pressed="false" data-i18n="top.history"></button>
       </nav>
       <div class="user">
+        <button type="button" id="pending-btn" class="icon bell" aria-haspopup="dialog">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>
+          <span class="bell-count" aria-hidden="true" hidden></span>
+        </button>
         <select class="theme-select" data-i18n-aria="top.theme"></select>
         <select class="lang-select" data-i18n-aria="top.language"></select>
         <span id="user-email" class="muted"></span>
@@ -60,28 +69,44 @@
       </div>
     </header>
 
-    <section class="toolbar">
-      <div class="field">
-        <span data-i18n="filter.project"></span>
-        <details id="f-projects" class="multi">
-          <summary></summary>
-          <div class="multi-panel"></div>
-        </details>
+    <!-- resumo: contadores que aplicam o atalho correspondente (só na tela principal) -->
+    <section id="summary" class="summary" data-i18n-aria="sum.title"></section>
+
+    <section id="toolbar" class="toolbar">
+      <button type="button" id="f-toggle" class="filters-toggle" aria-expanded="false" aria-controls="filters"><span data-i18n="filter.toggle"></span><span class="dot" aria-hidden="true" hidden></span></button>
+      <div id="filters" class="filters">
+        <label class="search"><span data-i18n="filter.search"></span>
+          <input type="search" id="f-q" maxlength="200" autocomplete="off" data-i18n-placeholder="filter.searchHint">
+        </label>
+        <div class="field">
+          <span data-i18n="filter.project"></span>
+          <details id="f-projects" class="multi">
+            <summary></summary>
+            <div class="multi-panel"></div>
+          </details>
+        </div>
+        <label><span data-i18n="filter.priority"></span>
+          <select id="f-priority"></select>
+        </label>
+        <label><span id="f-period-label"></span>
+          <select id="f-period"></select>
+        </label>
+        <label><span data-i18n="filter.assignee"></span>
+          <select id="f-assignee"></select>
+        </label>
+        <button type="button" id="f-clear" class="ghost" data-i18n="filter.clear" hidden></button>
       </div>
-      <label><span data-i18n="filter.priority"></span>
-        <select id="f-priority"></select>
-      </label>
-      <label><span id="f-period-label"></span>
-        <select id="f-period"></select>
-      </label>
-      <label><span data-i18n="filter.assignee"></span>
-        <select id="f-assignee"></select>
-      </label>
-      <button id="f-clear" class="ghost" data-i18n="filter.clear" hidden></button>
       <span class="spacer"></span>
-      <button id="new-project" data-i18n="btn.newProject"></button>
-      <button id="new-task" class="primary" data-i18n="btn.newTask"></button>
+      <div class="tool-actions">
+        <button type="button" id="export-csv" class="ghost" data-i18n="btn.exportCsv"></button>
+        <button type="button" id="print" class="ghost" data-i18n="btn.print"></button>
+        <button type="button" id="new-project" data-i18n="btn.newProject"></button>
+        <button type="button" id="new-task" class="primary" data-i18n="btn.newTask"></button>
+      </div>
     </section>
+
+    <!-- atalhos de filtro (botões liga/desliga) -->
+    <div id="chips" class="chips" role="group" data-i18n-aria="filter.shortcuts"></div>
 
     <div class="table-wrap">
       <table class="tasks">
@@ -89,20 +114,19 @@
           <col class="w-title"><col class="w-notes"><col class="w-prio"><col class="w-due">
           <col class="w-rem"><col class="w-who"><col class="w-status"><col class="w-act">
         </colgroup>
-        <thead>
-          <tr>
-            <th data-i18n="col.task"></th><th data-i18n="col.notes"></th><th data-i18n="col.priority"></th>
-            <th data-i18n="col.due"></th><th data-i18n="col.reminder"></th><th data-i18n="col.assignee"></th>
-            <th data-i18n="col.status"></th><th></th>
-          </tr>
-        </thead>
+        <thead id="head"></thead>
         <tbody id="rows"></tbody>
       </table>
+      <p id="loading" class="loading" role="status" hidden><span class="spinner" aria-hidden="true"></span><span data-i18n="loading"></span></p>
       <p id="empty" class="empty" hidden></p>
     </div>
   </div>
 
   <dialog id="modal"></dialog>
+  <!-- painel de pendências (atrasos, inatividade, lembretes) -->
+  <dialog id="drawer" class="drawer" aria-labelledby="drawer-title"></dialog>
+  <!-- menu "⋯" das linhas (um só, reposicionado a cada abertura) -->
+  <div id="menu" class="menu" role="menu" hidden></div>
   <div id="toast" class="toast" popover="manual" role="status" aria-live="polite" hidden></div>
 </body>
 </html>

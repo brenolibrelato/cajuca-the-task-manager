@@ -4,8 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cajuca</title>
-  <!-- aplica o tema escolhido antes de desenhar a página (evita piscar) -->
-  <script>try { var th = localStorage.getItem('cajuca.theme'); if (th === 'light' || th === 'dark') document.documentElement.dataset.theme = th; } catch (e) {}</script>
+  <meta name="description" content="Cajuca — planejador de tarefas hierárquico com status automático, prazos e lembretes.">
+  <!-- CSP: só o próprio site, o CDN do supabase-js e o servidor do Supabase. Estilos inline
+       (atributo style) ainda são usados pela interface, por isso 'unsafe-inline' só em style. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://dtojmatylupzfhuyyltj.supabase.co wss://dtojmatylupzfhuyyltj.supabase.co; base-uri 'none'; form-action 'self'; object-src 'none'">
+  <!-- tema escolhido antes de desenhar a página + aviso se o app não carregar -->
+  <script src="js/boot.js"></script>
   <link rel="stylesheet" href="styles.css">
   <link rel="icon" type="image/png" href="assets/favicon.png">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
@@ -14,6 +18,12 @@
   <script type="module" src="js/app.js"></script>
 </head>
 <body>
+  <noscript><p class="boot-error">O Cajuca precisa de JavaScript. / Cajuca needs JavaScript.</p></noscript>
+  <p id="boot-error" class="boot-error" role="alert" hidden>
+    Não foi possível carregar o app. Verifique a conexão e recarregue a página.<br>
+    Could not load the app. Check your connection and reload the page.
+  </p>
+
   <!-- Login -->
   <main id="login" class="login" hidden>
     <form id="login-form" class="login-card">
@@ -28,7 +38,9 @@
       <label><span data-i18n="login.email"></span><input type="email" name="email" required autocomplete="username"></label>
       <label><span data-i18n="login.password"></span><input type="password" name="password" required autocomplete="current-password"></label>
       <button class="primary" data-i18n="login.submit"></button>
-      <p id="login-error" class="error" hidden></p>
+      <p id="login-error" class="error" role="alert" hidden></p>
+      <button type="button" id="forgot" class="ghost" data-i18n="login.forgot"></button>
+      <p id="login-info" class="muted" role="status" hidden></p>
     </form>
   </main>
 
@@ -91,6 +103,6 @@
   </div>
 
   <dialog id="modal"></dialog>
-  <div id="toast" class="toast" hidden></div>
+  <div id="toast" class="toast" popover="manual" role="status" aria-live="polite" hidden></div>
 </body>
 </html>

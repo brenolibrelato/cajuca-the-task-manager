@@ -1,6 +1,12 @@
 -- =====================================================================
--- Cajuca — schema completo (Supabase / Postgres)
+-- Cajuca — schema base (Supabase / Postgres)
 -- Rodar inteiro no SQL Editor do Supabase, uma única vez.
+--
+-- ATENÇÃO: este arquivo é só a BASE. Depois dele, rode em ordem as migrations:
+--   migrations/001 ... 005 (projetos, vários responsáveis, ordem dos projetos, correções).
+-- Várias funções e políticas abaixo são substituídas por elas (por exemplo, a política
+-- "tasks_authenticated_all" e a coluna assignee_email deixam de existir).
+-- Em instalação nova, desative também o cadastro público (Authentication > Sign In / Providers).
 --
 -- Arquitetura: front estático (GitHub Pages) -> Supabase direto.
 -- As regras de negócio vivem aqui (triggers + funções RPC), então valem

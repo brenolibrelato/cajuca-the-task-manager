@@ -2,13 +2,23 @@
 // Para adicionar um texto: crie a chave nos dois dicionários e use t('chave').
 // Variáveis: t('overdue.text', { title: 'X' }) substitui {title}.
 
-const DICT = {
+export const DICT = {
   pt: {
     'app.subtitle': 'Planejador de tarefas',
     'login.email': 'E-mail',
     'login.password': 'Senha',
     'login.submit': 'Entrar',
     'login.error': 'E-mail ou senha inválidos.',
+    'login.forgot': 'Esqueci minha senha',
+    'login.needEmail': 'Digite seu e-mail acima e clique de novo.',
+    'login.resetSent': 'Se o e-mail estiver cadastrado, você receberá um link para criar uma nova senha.',
+    'pw.title': 'Nova senha',
+    'pw.new': 'Nova senha (mínimo 8 caracteres)',
+    'pw.save': 'Salvar senha',
+    'pw.done': 'Senha alterada.',
+    'btn.later': 'Fechar e perguntar depois',
+    'proj.up': 'Mover projeto para cima',
+    'proj.down': 'Mover projeto para baixo',
     'top.tasks': 'Tarefas',
     'top.history': 'Histórico',
     'top.logout': 'Sair',
@@ -42,7 +52,6 @@ const DICT = {
     'proj.editTitle': 'Renomear projeto',
     'proj.name': 'Nome do projeto',
     'proj.addTask': 'Nova tarefa neste projeto',
-    'proj.rename': 'Renomear projeto',
     'proj.delete': 'Excluir projeto',
     'proj.drag': 'Arraste para mudar a posição do projeto',
     'proj.confirmDelete': 'Excluir o projeto "{name}"?\n\nAs {n} tarefa(s) dele não serão apagadas: voltam para "Sem projeto" de quem as criou.',
@@ -182,7 +191,9 @@ const DICT = {
     'err.notStopped': 'Esta tarefa não está parada.',
     'err.notInTree': 'Uma das tarefas não pertence à árvore retomada.',
     'err.auth': 'Sessão expirada. Entre novamente.',
-    'err.email': 'E-mail do responsável inválido.',
+    'err.projectMove': 'Só o dono do projeto pode tirar ou mover esta tarefa para outro projeto.',
+    'err.assigneesLen': 'Limite de 50 responsáveis por tarefa.',
+    'err.planNeedsDue': 'O plano de ação precisa de um prazo.',
     'err.title': 'O nome da tarefa não pode ficar vazio.',
     'err.reminder': 'O lembrete não pode ser negativo.',
   },
@@ -193,6 +204,16 @@ const DICT = {
     'login.password': 'Password',
     'login.submit': 'Sign in',
     'login.error': 'Invalid email or password.',
+    'login.forgot': 'Forgot my password',
+    'login.needEmail': 'Type your email above and click again.',
+    'login.resetSent': 'If the email is registered, you will receive a link to create a new password.',
+    'pw.title': 'New password',
+    'pw.new': 'New password (at least 8 characters)',
+    'pw.save': 'Save password',
+    'pw.done': 'Password changed.',
+    'btn.later': 'Close and ask me later',
+    'proj.up': 'Move project up',
+    'proj.down': 'Move project down',
     'top.tasks': 'Tasks',
     'top.history': 'History',
     'top.logout': 'Sign out',
@@ -226,7 +247,6 @@ const DICT = {
     'proj.editTitle': 'Rename project',
     'proj.name': 'Project name',
     'proj.addTask': 'New task in this project',
-    'proj.rename': 'Rename project',
     'proj.delete': 'Delete project',
     'proj.drag': 'Drag to change the project position',
     'proj.confirmDelete': 'Delete project "{name}"?\n\nIts {n} task(s) will not be deleted: they go back to "No project" of whoever created them.',
@@ -366,7 +386,9 @@ const DICT = {
     'err.notStopped': 'This task is not stopped.',
     'err.notInTree': 'One of the tasks does not belong to the resumed tree.',
     'err.auth': 'Session expired. Please sign in again.',
-    'err.email': 'Invalid assignee email.',
+    'err.projectMove': 'Only the project owner can remove or move this task to another project.',
+    'err.assigneesLen': 'Limit of 50 assignees per task.',
+    'err.planNeedsDue': 'The action plan needs a due date.',
     'err.title': 'The task name cannot be empty.',
     'err.reminder': 'The reminder cannot be negative.',
   },
@@ -381,7 +403,8 @@ function initialLang() {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved in DICT) return saved;
   } catch { /* navegador sem storage: segue o idioma do sistema */ }
-  return (navigator.language || 'pt').toLowerCase().startsWith('pt') ? 'pt' : 'en';
+  const nav = typeof navigator !== 'undefined' && navigator.language;   // testes rodam em Node, sem navegador
+  return (nav || 'pt').toLowerCase().startsWith('pt') ? 'pt' : 'en';
 }
 
 let lang = initialLang();
@@ -415,7 +438,9 @@ export function applyStatic(root = document) {
 }
 
 // Mensagens do banco (escritas em português no schema.sql) -> chave traduzida
+// A primeira regra que casar vale: as específicas ficam antes das genéricas ("Sem permissão").
 const DB_ERRORS = [
+  [/alterar o projeto desta tarefa/i, 'err.projectMove'],
   [/subtarefas abertas/i, 'err.openChildren'],
   [/Hierarquia inválida/i, 'err.cycle'],
   [/novo prazo precisa/i, 'err.extendPast'],
@@ -429,6 +454,8 @@ const DB_ERRORS = [
   [/uq_projects_name/i, 'err.projectExists'],
   [/row-level security|Sem permissão/i, 'err.noPermission'],
   [/projects_name_check/i, 'err.projectName'],
+  [/chk_assignees_len/i, 'err.assigneesLen'],
+  [/chk_plan_has_due/i, 'err.planNeedsDue'],
 ];
 
 export function translateError(message) {

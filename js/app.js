@@ -1,4 +1,6 @@
-import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+// Versão fixa (não use "@2"): uma versão nova ou comprometida do CDN rodaria direto no app.
+// Para atualizar, troque o número aqui e teste.
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/+esm';
 import { SUPABASE_URL, SUPABASE_KEY, REFRESH_MINUTES } from './config.js';
 import {
   DEFAULT_FILTERS, todayISO, buildForest, descendants, ancestors, rootsFor,
@@ -25,7 +27,10 @@ const state = {
   collapsed: new Set(),
   expanded: new Set(),
   leaving: new Set(),   // raízes recém-concluídas, ainda visíveis na tela principal
-  busy: false,
+  busy: false,          // verificação de automações em andamento
+  editing: false,       // edição direta ou arraste em andamento: pausa a atualização automática
+  loadedAt: 0,          // quando a lista foi carregada pela última vez (ms)
+  usersAt: 0,           // idem para a lista de usuários
 };
 
 const PERIODS = {
@@ -38,11 +43,23 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// O aviso é um popover (camada superior): aparece também por cima de pop-ups abertos.
+function hideToast() {
+  const el = $('#toast');
+  try { el.hidePopover(); } catch { /* já estava fechado ou navegador sem popover */ }
+  el.hidden = true;
+}
+
 let toastTimer;
 function toast(msg, isError = false, action = null) {
   if (isError && dlg.open) {
     const box = dlg.querySelector('.m-error');
-    if (box) { box.textContent = msg; box.hidden = false; return; }
+    if (box) {
+      box.textContent = msg;
+      box.hidden = false;
+      dlg.querySelector('.m-escape')?.removeAttribute('hidden');   // pop-up obrigatório com erro: dá uma saída
+      return;
+    }
   }
   const el = $('#toast');
   el.textContent = msg;
@@ -50,13 +67,28 @@ function toast(msg, isError = false, action = null) {
     const b = document.createElement('button');
     b.className = 'toast-btn';
     b.textContent = action.label;
-    b.addEventListener('click', () => { el.hidden = true; action.onClick(); });
+    b.addEventListener('click', () => { hideToast(); action.onClick(); });
     el.append(b);
   }
   el.className = 'toast' + (isError ? ' err' : '');
+  el.setAttribute('role', isError ? 'alert' : 'status');
   el.hidden = false;
+  try { el.hidePopover(); el.showPopover(); } catch { /* sem popover: fica na camada normal */ }
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, action ? 8000 : 5000);
+  toastTimer = setTimeout(hideToast, action ? 8000 : 5000);
+}
+
+// Evita envio duplicado: desabilita os botões de envio enquanto a chamada ao banco não termina.
+function guard(handler) {
+  return async e => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const buttons = [...form.querySelectorAll('button:not([type=button])')];
+    if (buttons.some(b => b.disabled)) return;
+    buttons.forEach(b => { b.disabled = true; });
+    try { await handler(e); }
+    finally { buttons.forEach(b => { b.disabled = false; }); }
+  };
 }
 
 function switchView(view) {
@@ -92,7 +124,8 @@ function openDialog(title, bodyHtml, { mandatory = false } = {}) {
       <h2>${esc(title)}</h2>
       ${mandatory ? '' : `<button type="button" class="icon" data-close aria-label="${t('action.close')}">✕</button>`}
     </div>
-    <div class="m-body">${bodyHtml}<p class="error m-error" hidden></p></div>`;
+    <div class="m-body">${bodyHtml}<p class="error m-error" role="alert" hidden></p>
+      ${mandatory ? `<button type="button" class="m-escape" data-close hidden>${t('btn.later')}</button>` : ''}</div>`;
   dlg.oncancel = e => { if (mandatory) e.preventDefault(); };   // ESC não fecha pop-up obrigatório
   dlg.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => dlg.close()));
   dlg.showModal();
@@ -129,14 +162,18 @@ function canEditNode(node) {
 }
 
 // ---------- dados ----------
+let loadSeq = 0;
 async function loadTasks() {
+  const seq = ++loadSeq;
   const [{ data, error }, proj, mem, ord] = await Promise.all([
     sb.from('tasks').select('*'),
     sb.from('projects').select('*'),
     sb.from('project_members').select('*'),
     sb.from('project_order').select('project_id, position').order('position'),
   ]);
+  if (seq !== loadSeq) return true;   // chegou uma carga mais nova: esta resposta é velha, descarta
   if (error || proj.error || mem.error || ord.error) return fail(error || proj.error || mem.error || ord.error);
+  state.loadedAt = Date.now();
   state.projects = proj.data;
   state.projectOrder = ord.data.map(o => o.project_id ?? NO_PROJECT);   // nulo = "Sem projeto"
   state.members = mem.data;
@@ -170,6 +207,15 @@ async function runAutomations() {
 async function afterChange() {
   return loadTasks();
 }
+
+// Quem divide projetos só vê a mudança do outro ao recarregar. Ao voltar para a aba,
+// atualiza a lista (sem pop-ups) se já faz mais de um minuto.
+const STALE_MS = 60 * 1000;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !state.userId) return;
+  if (state.busy || state.editing || dlg.open || Date.now() - state.loadedAt < STALE_MS) return;
+  loadTasks();
+});
 
 // "Lembrar amanhã" no pop-up de atraso. Fica salvo só neste navegador, por usuário:
 // { [event_id]: 'AAAA-MM-DD' } = não mostrar esse atraso de novo nesse dia.
@@ -205,11 +251,14 @@ function renderFilters() {
     .map(([v, k]) => `<option value="${v}">${t(k)}</option>`).join('');
   $('#f-period').value = f.period;
 
-  const emails = [...new Set([...state.forest.byId.values()].flatMap(t => t.assignees || []))]
+  // sem repetir "Ana" e "ana" (o banco as trata como a mesma pessoa)
+  const emails = [...new Map([...state.forest.byId.values()].flatMap(t => t.assignees || []).map(e => [e.toLowerCase(), e])).values()]
     .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  // responsável que não existe mais em nenhuma tarefa: solta o filtro (senão a lista fica vazia sem explicação)
+  if (f.assignee && f.assignee !== '__none__' && !emails.some(e => e.toLowerCase() === f.assignee.toLowerCase())) f.assignee = '';
   $('#f-assignee').innerHTML = `<option value="">${t('filter.everyone')}</option><option value="__none__">${t('filter.noAssignee')}</option>`
     + emails.map(e => `<option value="${esc(e)}">${esc(e)}</option>`).join('');
-  $('#f-assignee').value = f.assignee;
+  $('#f-assignee').value = [...$('#f-assignee').options].find(o => o.value.toLowerCase() === f.assignee.toLowerCase())?.value ?? '';
 
   renderProjectFilter(f);
   $('#f-clear').hidden = !isFilterActive(f);
@@ -263,7 +312,7 @@ function rowHtml({ node: n, showingAll }, leaving = false, readOnly = false) {
     <button class="icon danger" data-action="delete" title="${t('action.delete')}" aria-label="${t('action.delete')}">${ICON.trash}</button>`;
 
   // edição direta: clicar na célula abre o campo (só para quem pode editar)
-  const ed = field => readOnly ? '' : ` data-field="${field}"`;
+  const ed = field => readOnly ? '' : ` data-field="${field}" tabindex="0"`;   // tabindex: dá para editar pelo teclado (Enter)
   return `
     <tr class="st-${n.status} ${n.paused ? 'paused' : ''} ${leaving ? 'leaving' : ''} ${readOnly ? 'ro' : ''}" data-id="${n.id}">
       <td>
@@ -331,6 +380,8 @@ function projectRowHtml(g, open) {
   const canAdd = state.view === 'main' && (!p || canEditProject(p));
   const owner = isOwner(p);
   const actions = `
+    ${state.view === 'main' ? `<button class="icon" data-action="proj-up" title="${t('proj.up')}" aria-label="${t('proj.up')}">▴</button>
+    <button class="icon" data-action="proj-down" title="${t('proj.down')}" aria-label="${t('proj.down')}">▾</button>` : ''}
     ${canAdd ? `<button class="icon" data-action="proj-add" title="${t('proj.addTask')}" aria-label="${t('proj.addTask')}">${ICON.plus}</button>` : ''}
     ${owner ? `<button class="icon" data-action="proj-edit" title="${t('proj.edit')}" aria-label="${t('proj.edit')}">${ICON.share}</button>
     <button class="icon danger" data-action="proj-delete" title="${t('proj.delete')}" aria-label="${t('proj.delete')}">${ICON.trash}</button>` : ''}`;
@@ -354,7 +405,6 @@ function projectRowHtml(g, open) {
     </tr>`;
 }
 
-// ---------- projetos ----------
 // ---------- arrastar projetos ----------
 // Pointer events (mouse, caneta e toque) em vez do arrastar nativo do HTML, que
 // falha com linhas de tabela em alguns navegadores. Durante o arraste só as
@@ -476,6 +526,16 @@ function bindProjectDrag() {
   window.addEventListener('keydown', e => { if (e.key === 'Escape' && drag?.active) finish(false); });
 }
 
+// Alternativa ao arraste (teclado e leitores de tela): troca o projeto de lugar com o vizinho visível.
+function moveProject(key, dir) {
+  const keys = [...$('#rows').querySelectorAll('tr.proj-row')].map(r => r.dataset.project);
+  const i = keys.indexOf(key), j = i + dir;
+  if (i < 0 || j < 0 || j >= keys.length) return;
+  [keys[i], keys[j]] = [keys[j], keys[i]];
+  saveProjectOrder(keys);
+  $('#rows').querySelector(`tr.proj-row[data-project="${CSS.escape(key)}"] [data-action="${dir < 0 ? 'proj-up' : 'proj-down'}"]`)?.focus();
+}
+
 // Salva a ordem da tela. Projetos escondidos pelo filtro mantêm o lugar deles.
 async function saveProjectOrder(visibleKeys) {
   const shown = new Set(visibleKeys);
@@ -489,6 +549,7 @@ async function saveProjectOrder(visibleKeys) {
   if (error) { fail(error); await loadTasks(); }
 }
 
+// ---------- projetos ----------
 async function projectForm(project = null) {
   await loadUsers();   // pega usuários criados depois do login
   const others = state.users.filter(u => u.id !== state.userId);
@@ -520,8 +581,7 @@ async function projectForm(project = null) {
     </form>`);
   const form = dlg.querySelector('#proj-form');
   form.name.focus();
-  form.addEventListener('submit', async e => {
-    e.preventDefault();
+  form.addEventListener('submit', guard(async () => {
     const name = form.name.value.trim();
     let projectId = project?.id;
     if (project) {
@@ -548,7 +608,7 @@ async function projectForm(project = null) {
       if (error) return fail(error);
     }
     dlg.close();
-  });
+  }));
   await done;
   await loadTasks();
 }
@@ -572,10 +632,13 @@ function defaultProjectId() {
   return p && canEditProject(p) ? p.id : null;
 }
 
-async function loadUsers() {
+// Cache de 1 minuto: evita uma ida ao banco a cada formulário aberto
+async function loadUsers({ force = false } = {}) {
+  if (!force && state.users.length && Date.now() - state.usersAt < 60 * 1000) return;
   const { data, error } = await sb.rpc('list_users');
   if (error) return fail(error);
   state.users = data;
+  state.usersAt = Date.now();
 }
 
 // ---------- edição direta na tabela ----------
@@ -614,8 +677,8 @@ function startInlineEdit(cell, node, field) {
       render();
       return;
     }
+    state.editing = false;   // libera já: o próximo clique em outra célula não é ignorado enquanto salva
     const { error } = await sb.from('tasks').update({ [field]: value }).eq('id', node.id);
-    state.editing = false;
     if (error) { fail(error); render(); return; }
     await afterChange();
   };
@@ -713,14 +776,13 @@ async function editAssignees(node) {
       </div>
     </form>`);
   bindAssigneeField(dlg);
-  dlg.querySelector('#who-form').addEventListener('submit', async e => {
-    e.preventDefault();
+  dlg.querySelector('#who-form').addEventListener('submit', guard(async e => {
     const { error } = await sb.from('tasks')
       .update({ assignees: parseAssignees(e.target.assignees.value) }).eq('id', node.id);
     if (error) return fail(error);
     changed = true;
     dlg.close();
-  });
+  }));
   await done;
   if (changed) await afterChange();
 }
@@ -761,8 +823,7 @@ async function taskForm({ task = null, parentId = null, projectId = null }) {
     </form>`);
   bindAssigneeField(dlg);
 
-  dlg.querySelector('#task-form').addEventListener('submit', async e => {
-    e.preventDefault();
+  dlg.querySelector('#task-form').addEventListener('submit', guard(async e => {
     const fd = new FormData(e.target);
     const payload = {
       title: fd.get('title').trim(),
@@ -779,7 +840,7 @@ async function taskForm({ task = null, parentId = null, projectId = null }) {
     if (error) return fail(error);
     if (parentId) { state.collapsed.delete(parentId); state.expanded.add(parentId); }
     dlg.close();
-  });
+  }));
 
   await done;
 }
@@ -809,13 +870,12 @@ async function pauseTask(node) {
       <label>${t('pause.reason')}<textarea name="reason"></textarea></label>
       <div class="m-actions"><button type="button" data-close>${t('btn.cancel')}</button><button class="primary">${t('pause.submit')}</button></div>
     </form>`);
-  dlg.querySelector('#pause-form').addEventListener('submit', async e => {
-    e.preventDefault();
+  dlg.querySelector('#pause-form').addEventListener('submit', guard(async e => {
     const reason = new FormData(e.target).get('reason');
     const { error } = await sb.rpc('set_situation', { p_task: node.id, p_situation: 'stopped', p_reason: reason });
     if (error) return fail(error);
     dlg.close();
-  });
+  }));
   await done;
   await afterChange();
 }
@@ -854,8 +914,7 @@ async function resumeTask(node) {
       <div class="m-actions"><button type="button" data-close>${t('btn.cancel')}</button><button class="primary">${t('resume.submit')}</button></div>
     </form>`);
 
-  dlg.querySelector('#resume-form').addEventListener('submit', async e => {
-    e.preventDefault();
+  dlg.querySelector('#resume-form').addEventListener('submit', guard(async () => {
     const changes = [];
     dlg.querySelectorAll('#resume-form tbody tr').forEach(tr => {
       const item = { id: tr.dataset.id };
@@ -874,7 +933,7 @@ async function resumeTask(node) {
     const { error } = await sb.rpc('resume_task', { p_task: node.id, p_changes: changes });
     if (error) return fail(error);
     dlg.close();
-  });
+  }));
   await done;
   await afterChange();
 }
@@ -920,15 +979,13 @@ async function overduePopup(p) {
     dlg.querySelectorAll('[data-pane]').forEach(p => { p.hidden = p.dataset.pane !== btn.dataset.mode; });
   }));
 
-  dlg.querySelector('[data-pane=extend]').addEventListener('submit', async e => {
-    e.preventDefault();
+  dlg.querySelector('[data-pane=extend]').addEventListener('submit', guard(async e => {
     const { error } = await sb.rpc('extend_due_date', { p_task: node.id, p_new_due: e.target.due.value });
     if (error) return fail(error);
     dlg.close();
-  });
+  }));
 
-  dlg.querySelector('[data-pane=plan]').addEventListener('submit', async e => {
-    e.preventDefault();
+  dlg.querySelector('[data-pane=plan]').addEventListener('submit', guard(async e => {
     const f = e.target;
     const { data: planId, error } = await sb.rpc('create_action_plan', {
       p_parent: node.id, p_title: f.plan_title.value.trim(), p_due: f.due.value,
@@ -942,7 +999,7 @@ async function overduePopup(p) {
     }
     state.collapsed.delete(node.id);
     dlg.close();
-  });
+  }));
 
   await done;
   await loadTasks();
@@ -998,8 +1055,7 @@ async function inactivityPopup(taskId) {
   });
   form.plan_title.addEventListener('input', () => { form.plan_due.required = form.plan_title.value.trim() !== ''; });
 
-  form.addEventListener('submit', async e => {
-    e.preventDefault();
+  form.addEventListener('submit', guard(async () => {
     if (form.due.value !== (node.due_date || '')) {
       const { error } = await sb.from('tasks').update({ due_date: form.due.value || null }).eq('id', node.id);
       if (error) return fail(error);
@@ -1017,7 +1073,7 @@ async function inactivityPopup(taskId) {
     });
     if (error) return fail(error);
     dlg.close();
-  });
+  }));
 
   await done;
   await loadTasks();
@@ -1039,6 +1095,33 @@ async function reminderPopup(p) {
   await done;   // fechar de qualquer jeito conta como "exibido"
   const { error } = await sb.rpc('ack_reminder', { p_task: node.id });
   if (error) fail(error);
+}
+
+// ---------- login ----------
+function showLoginError(key) {
+  const err = $('#login-error');
+  err.dataset.key = key ?? '';
+  err.hidden = !key;
+  if (key) err.textContent = t(key);
+}
+
+// Aberta pelo link do e-mail "esqueci minha senha" (evento PASSWORD_RECOVERY)
+async function passwordDialog() {
+  const done = openDialog(t('pw.title'), `
+    <form id="pw-form" style="display:grid;gap:12px">
+      <label>${t('pw.new')}<input type="password" name="pw" required minlength="8" autocomplete="new-password"></label>
+      <div class="m-actions">
+        <button type="button" data-close>${t('btn.cancel')}</button>
+        <button class="primary">${t('pw.save')}</button>
+      </div>
+    </form>`);
+  dlg.querySelector('#pw-form').addEventListener('submit', guard(async e => {
+    const { error } = await sb.auth.updateUser({ password: e.target.pw.value });
+    if (error) return fail(error);
+    dlg.close();
+    toast(t('pw.done'));
+  }));
+  await done;
 }
 
 // ---------- eventos ----------
@@ -1091,6 +1174,7 @@ function bindUi() {
           else state.collapsedProjects.add(key);
           render();
           break;
+        case 'proj-up': case 'proj-down': moveProject(key, btn.dataset.action === 'proj-up' ? -1 : 1); break;
         case 'proj-add': await taskForm({ projectId: project?.id ?? null }); await afterChange(); break;
         case 'proj-edit': if (project) await projectForm(project); break;
         case 'proj-delete': if (project) await deleteProject(project); break;
@@ -1111,19 +1195,37 @@ function bindUi() {
     }
   });
 
+  // edição direta pelo teclado: Tab até a célula e Enter (ou F2)
+  $('#rows').addEventListener('keydown', e => {
+    if ((e.key !== 'Enter' && e.key !== 'F2') || !e.target.matches('[data-field]') || state.editing) return;
+    e.preventDefault();
+    const node = state.forest.byId.get(e.target.closest('tr').dataset.id);
+    if (node) startInlineEdit(e.target, node, e.target.dataset.field);
+  });
+
   $('#rows').addEventListener('change', e => {
     if (e.target.dataset.action !== 'status') return;
     const node = state.forest.byId.get(e.target.closest('tr').dataset.id);
     changeStatus(node, e.target.value);
   });
 
-  $('#login-form').addEventListener('submit', async e => {
-    e.preventDefault();
+  $('#login-form').addEventListener('submit', guard(async e => {
     const fd = new FormData(e.target);
+    $('#login-info').hidden = true;
     const { error } = await sb.auth.signInWithPassword({ email: fd.get('email'), password: fd.get('password') });
-    const err = $('#login-error');
-    err.hidden = !error;
-    if (error) err.textContent = t('login.error');
+    showLoginError(error ? 'login.error' : null);
+  }));
+
+  // Sempre a mesma resposta, exista o e-mail ou não (não revela quem tem conta)
+  $('#forgot').addEventListener('click', async () => {
+    const email = $('#login-form').email.value.trim();
+    $('#login-info').hidden = true;
+    if (!email) { showLoginError('login.needEmail'); return; }
+    showLoginError(null);
+    // volta para esta mesma página; o endereço precisa estar em "Redirect URLs" do Supabase Auth
+    await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+    $('#login-info').textContent = t('login.resetSent');
+    $('#login-info').hidden = false;
   });
 
   document.querySelectorAll('.theme-select').forEach(sel => sel.addEventListener('change', e => {
@@ -1139,7 +1241,6 @@ function bindUi() {
   $('#logout').addEventListener('click', () => sb.auth.signOut());
 }
 
-// ---------- idioma ----------
 // ---------- tema ----------
 const THEME_KEY = 'cajuca.theme';
 function getTheme() {
@@ -1154,6 +1255,7 @@ function setTheme(theme) {
   else document.documentElement.dataset.theme = theme;
 }
 
+// ---------- idioma ----------
 function applyLanguage() {
   document.querySelectorAll('.theme-select').forEach(sel => {
     sel.innerHTML = ['auto', 'light', 'dark'].map(v => `<option value="${v}">${t('theme.' + v)}</option>`).join('');
@@ -1165,13 +1267,14 @@ function applyLanguage() {
     sel.value = getLang();
   });
   const err = $('#login-error');
-  if (!err.hidden) err.textContent = t('login.error');
+  if (!err.hidden) err.textContent = t(err.dataset.key || 'login.error');
   render();
 }
 
 // ---------- sessão ----------
 let refreshTimer;
 async function onSession(session) {
+  if (dlg.open) dlg.close();   // sessão caiu com um pop-up aberto: não deixa dados à vista sobre a tela de login
   $('#login').hidden = !!session;
   $('#app').hidden = !session;
   clearInterval(refreshTimer);
@@ -1182,7 +1285,7 @@ async function onSession(session) {
   state.userId = session?.user?.id ?? null;
   if (!session) return;
   $('#user-email').textContent = session.user.email;
-  await loadUsers();
+  await loadUsers({ force: true });
   await runAutomations();
   refreshTimer = setInterval(runAutomations, REFRESH_MINUTES * 60 * 1000);
 }
@@ -1190,9 +1293,15 @@ async function onSession(session) {
 bindUi();
 applyLanguage();
 let lastUserId = '(início)';
-sb.auth.onAuthStateChange((_event, session) => {
+sb.auth.onAuthStateChange((event, session) => {
   const id = session?.user?.id ?? null;
-  if (id === lastUserId) return;      // ignora renovação de token
+  const recovering = event === 'PASSWORD_RECOVERY';
+  if (id === lastUserId && !recovering) return;      // ignora renovação de token
+  const changed = id !== lastUserId;
   lastUserId = id;
-  setTimeout(() => onSession(session), 0);   // fora do callback, como recomenda o supabase-js
+  setTimeout(async () => {   // fora do callback, como recomenda o supabase-js
+    if (recovering) await passwordDialog();   // antes dos avisos automáticos, que esperam o pop-up fechar
+    if (changed) await onSession(session);
+  }, 0);
 });
+window.__cajucaReady = true;   // js/boot.js: o app carregou, não mostra o aviso de falha
